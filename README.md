@@ -29,26 +29,33 @@ A production-grade, 7-inch **Smart Home Touch Hub and Voice Assistant Endpoint**
 
 ---
 
-## Ecosystem Integration: 7C + Spider + RLCD
+## Room Integration & Spider Audio Remote
+
+In this deployment, the **7C Panel** serves as the central bedside touch controller and voice endpoint for the bedroom, directly controlling the **Spider** Hi-Fi audio player:
 
 ```text
-       +----------------------------------------------------+
-       |              Home Assistant Server                 |
-       +----------------------------------------------------+
-              ^                         ^            ^
-              |                         |            |
-       [Assist Pipeline]           [Dashboard]  [Music Assistant]
-              |                         |            |
-              v                         v            v
-     +-----------------+       +----------------+   +-------------------+
-     |   RLCD 4.2"     |       |  Touch LCD 7C  |   |  Spider Streamer  |
-     | Voice Satellite |       |  (This Repo)   |-->|  ESP32-S3 + DAC   |
-     +-----------------+       +----------------+   +-------------------+
+                         +------------------------------------+
+                         |       Home Assistant Server        |
+                         |    Dashboard & Music Assistant     |
+                         +------------------------------------+
+                                    ^              |
+               Wi-Fi ESPHome Native |              | Stream Control & Metadata
+               Touch Events & State |              | via Music Assistant
+                                    v              v
+        +----------------------------------+   +-------------------------------+
+        |   Waveshare ESP32-S3-Touch-7C    |   |     Spider Hi-Fi Streamer     |
+        |   Room Touch Hub & Voice Endpoint|   |   (ESP32-S3 + PCM5102A DAC)   |
+        |   - LVGL 800x480 Touch Dashboard |--->   - Squeezelite / Music Assist|
+        |   - Dedicated Spider Controller  |   |   - High-fidelity room audio  |
+        |   - Hardware AEC Voice endpoint  |   +-------------------------------+
+        +----------------------------------+
 ```
 
-1. **Touch LCD 7C (This Repository):** Central bedside or desk touch hub providing complete room control and tactile media player navigation.
-2. **Spider Audio Streamer:** Dedicated network audio streamer (ESP32-S3 + PCM5102A Hi-Fi DAC). The 7C panel acts as Spider's physical remote screen, selecting radio streams and showing live track details.
-3. **RLCD 4.2" Satellite:** Silent, non-glare reflective display satellite for discrete voice assistance in other rooms (see [waveshare-esp32-s3-rlcd-4.2](https://github.com/hookmt/waveshare-esp32-s3-rlcd-4.2)).
+1. **Touch LCD 7C (This Repository):** Central bedside/desk touch hub providing tactile control of lighting, scenes, climate, and the media player.
+2. **Spider Audio Streamer:** Dedicated room audio streamer (ESP32-S3 + PCM5102A DAC). The 7C panel acts as Spider's physical remote screen, selecting radio presets, skipping tracks, and displaying live metadata.
+
+> [!TIP]
+> In other rooms (such as the Studio or Kitchen), voice interaction is handled by our reflective-display satellites: [waveshare-esp32-s3-rlcd-4.2](https://github.com/hookmt/waveshare-esp32-s3-rlcd-4.2).
 
 ---
 
