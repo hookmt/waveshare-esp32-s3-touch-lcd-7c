@@ -1,4 +1,4 @@
-# Waveshare ESP32-S3-Touch-LCD-7C · Smart Home Hub & Voice Satellite
+# Waveshare ESP32-S3-Touch-LCD-7C - Smart Home Hub & Voice Satellite
 
 [![ESPHome](https://img.shields.io/badge/ESPHome-2026.10.2-blue.svg)](https://esphome.io)
 [![Hardware](https://img.shields.io/badge/Board-Waveshare%20ESP32--S3--Touch--LCD--7C-orange.svg)](https://www.waveshare.com)
@@ -10,7 +10,7 @@ A production-grade, 7-inch **Smart Home Touch Hub and Voice Assistant Endpoint**
 ![Waveshare 7C Touch Panel](hardware/05_front_assembled_desk.jpg)
 
 > [!NOTE]
-> **Video Demonstration:** A live video demo showcasing responsive touchscreen navigation, internet radio playback, and direct remote control of the **Spider** Hi-Fi audio player is available in `hardware/7c_touch_spider_demo.mp4` (or embedded below).
+> **Video Demonstration:** A live video demo showcasing responsive touchscreen navigation, internet radio playback, and direct remote control of the **Spider** Hi-Fi audio player is available in [GitHub Release v1.0.0](https://github.com/hookmt/waveshare-esp32-s3-touch-lcd-7c/releases/tag/v1.0.0) or direct download: [7c_touch_spider_demo.mp4](https://github.com/hookmt/waveshare-esp32-s3-touch-lcd-7c/releases/download/v1.0.0/7c_touch_spider_demo.mp4).
 
 
 ---
@@ -48,7 +48,7 @@ A production-grade, 7-inch **Smart Home Touch Hub and Voice Assistant Endpoint**
 
 1. **Touch LCD 7C (This Repository):** Central bedside or desk touch hub providing complete room control and tactile media player navigation.
 2. **Spider Audio Streamer:** Dedicated network audio streamer (ESP32-S3 + PCM5102A Hi-Fi DAC). The 7C panel acts as Spider's physical remote screen, selecting radio streams and showing live track details.
-3. **RLCD 4.2" Satellite:** Silent, non-glare reflective display satellite for discrete voice assistance in other rooms.
+3. **RLCD 4.2" Satellite:** Silent, non-glare reflective display satellite for discrete voice assistance in other rooms (see [waveshare-esp32-s3-rlcd-4.2](https://github.com/hookmt/waveshare-esp32-s3-rlcd-4.2)).
 
 ---
 
