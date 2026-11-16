@@ -1,0 +1,257 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <defs>
+    <!-- Cienie Material Design -->
+    <filter id="shadow-card" x="-5%" y="-5%" width="110%" height="115%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="shadow-art" x="-10%" y="-10%" width="120%" height="125%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000000" flood-opacity="0.75"/>
+    </filter>
+    <filter id="shadow-active-item" x="-10%" y="-10%" width="120%" height="125%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#00E5FF" flood-opacity="0.3"/>
+    </filter>
+
+    <!-- Gradienty tła i powierzchni -->
+    <linearGradient id="bg-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#121212"/>
+      <stop offset="100%" stop-color="#0A0A0A"/>
+    </linearGradient>
+
+    <linearGradient id="card-surface" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#212121"/>
+      <stop offset="100%" stop-color="#181818"/>
+    </linearGradient>
+
+    <!-- Gradient atrapy okładki albumu -->
+    <linearGradient id="cover-art-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E3C72"/>
+      <stop offset="50%" stop-color="#2A5298"/>
+      <stop offset="100%" stop-color="#0F2027"/>
+    </linearGradient>
+
+    <!-- Maski zanikania krawędzi paska przewijania (fade edges) -->
+    <linearGradient id="fade-left" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#212121" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#212121" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="fade-right" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#212121" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#212121" stop-opacity="1"/>
+    </linearGradient>
+  </defs>
+
+  <style>
+    .font-base { font-family: -apple-system, BlinkMacSystemFont, "Roboto", "Segoe UI", sans-serif; }
+    .font-mono { font-family: "SF Pro Display", "Roboto Condensed", "Impact", sans-serif; font-weight: 800; }
+    .tab-text { font-size: 13px; font-weight: 700; letter-spacing: 0.8px; }
+  </style>
+
+  <!-- 1. GŁÓWNE TŁO -->
+  <rect width="800" height="480" fill="url(#bg-gradient)"/>
+
+  <!-- 2. STAŁY GÓRNY PASEK ZAKŁADEK (H: 52px) -->
+  <rect x="0" y="0" width="800" height="52" fill="#161616"/>
+  <line x1="0" y1="52" x2="800" y2="52" stroke="#2A2A2A" stroke-width="1"/>
+
+  <!-- Tab 1: DOM -->
+  <g transform="translate(12, 6)">
+    <rect x="0" y="0" width="186" height="40" rx="8" fill="transparent"/>
+    <text x="93" y="24" fill="#757575" class="font-base tab-text" text-anchor="middle">DOM</text>
+  </g>
+
+  <!-- Tab 2: AUDIO (SPIDER) (AKTYWNA) -->
+  <g transform="translate(206, 6)">
+    <rect x="0" y="0" width="186" height="40" rx="8" fill="#2A2D32" stroke="#3D444E" stroke-width="1.5"/>
+    <rect x="20" y="36" width="146" height="4" rx="2" fill="#00E5FF"/>
+    <text x="93" y="24" fill="#FFFFFF" class="font-base tab-text" text-anchor="middle">AUDIO (SPIDER)</text>
+  </g>
+
+  <!-- Tab 3: OŚW. SYPIALNIA -->
+  <g transform="translate(400, 6)">
+    <rect x="0" y="0" width="186" height="40" rx="8" fill="transparent"/>
+    <text x="93" y="24" fill="#757575" class="font-base tab-text" text-anchor="middle">OŚW. SYPIALNIA</text>
+  </g>
+
+  <!-- Tab 4: OŚW. W DOMU -->
+  <g transform="translate(594, 6)">
+    <rect x="0" y="0" width="194" height="40" rx="8" fill="transparent"/>
+    <text x="97" y="24" fill="#757575" class="font-base tab-text" text-anchor="middle">OŚW. W DOMU</text>
+  </g>
+
+
+  <!-- 3. OBSZAR ROBOCZY: LEWA STRONA - OKŁADKA I ŹRÓDŁO (x: 16, y: 64, w: 310, h: 338) -->
+  <g filter="url(#shadow-card)">
+    <rect x="16" y="64" width="310" height="338" rx="14" fill="url(#card-surface)" stroke="#2C2C2E" stroke-width="1"/>
+
+    <!-- Okładka albumu (230 x 230 px) -->
+    <g transform="translate(56, 84)" filter="url(#shadow-art)">
+      <rect x="0" y="0" width="230" height="230" rx="12" fill="url(#cover-art-grad)"/>
+      <circle cx="115" cy="115" r="75" fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.15"/>
+      <circle cx="115" cy="115" r="50" fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.2"/>
+      <circle cx="115" cy="115" r="25" fill="#141414"/>
+      <circle cx="115" cy="115" r="6" fill="#00E5FF"/>
+      <path d="M125 90 L125 125 A12 12 0 1 1 113 113 L125 113 L125 90 Z" fill="#FFFFFF" opacity="0.4"/>
+    </g>
+
+    <!-- Plakietka źródła / strumienia -->
+    <g transform="translate(46, 334)">
+      <rect x="0" y="0" width="250" height="32" rx="16" fill="#161616" stroke="#2E2E32" stroke-width="1"/>
+      <rect x="24" y="11" width="3" height="10" rx="1.5" fill="#00E5FF"/>
+      <rect x="30" y="7" width="3" height="18" rx="1.5" fill="#00E5FF"/>
+      <rect x="36" y="13" width="3" height="6" rx="1.5" fill="#00E5FF"/>
+      <text x="50" y="21" fill="#90A4AE" class="font-base" font-size="11" font-weight="700" letter-spacing="0.5">SENDSPIN • FLAC 48 kHz</text>
+    </g>
+  </g>
+
+
+  <!-- 4. OBSZAR ROBOCZY: PRAWA STRONA - KONSOLA STEROWANIA (x: 342, y: 64, w: 442, h: 338) -->
+  <g filter="url(#shadow-card)">
+    <rect x="342" y="64" width="442" height="338" rx="14" fill="url(#card-surface)" stroke="#2C2C2E" stroke-width="1"/>
+
+    <!-- Metadane utworu -->
+    <text x="366" y="102" fill="#FFFFFF" class="font-base" font-size="22" font-weight="800">Comfortably Numb</text>
+    <text x="366" y="126" fill="#90A4AE" class="font-base" font-size="15" font-weight="600">Pink Floyd — The Wall</text>
+
+    <!-- Pasek postępu utworu (Seek bar) -->
+    <g transform="translate(366, 144)">
+      <rect x="0" y="6" width="394" height="6" rx="3" fill="#2C2C2E"/>
+      <rect x="0" y="6" width="220" height="6" rx="3" fill="#00E5FF"/>
+      <circle cx="220" cy="9" r="6" fill="#FFFFFF"/>
+      <text x="0" y="26" fill="#757575" class="font-base" font-size="11" font-weight="600">03:42</text>
+      <text x="394" y="26" fill="#757575" class="font-base" font-size="11" font-weight="600" text-anchor="end">06:21</text>
+    </g>
+
+    <!-- Przyciski transportowe -->
+    <g transform="translate(366, 186)">
+      <!-- Poprzedni -->
+      <rect x="36" y="6" width="76" height="54" rx="10" fill="#262628" stroke="#3A3A3D" stroke-width="1"/>
+      <path d="M66 25 L78 17 L78 39 Z M62 17 L62 39" stroke="#FFFFFF" stroke-width="2.5" fill="#FFFFFF" stroke-linecap="round"/>
+
+      <!-- PLAY / PAUZA (Wyróżniony) -->
+      <rect x="144" y="0" width="106" height="66" rx="14" fill="#00E5FF"/>
+      <rect x="186" y="21" width="8" height="24" rx="2" fill="#121212"/>
+      <rect x="202" y="21" width="8" height="24" rx="2" fill="#121212"/>
+
+      <!-- Następny -->
+      <rect x="282" y="6" width="76" height="54" rx="10" fill="#262628" stroke="#3A3A3D" stroke-width="1"/>
+      <path d="M326 25 L314 17 L314 39 Z M330 17 L330 39" stroke="#FFFFFF" stroke-width="2.5" fill="#FFFFFF" stroke-linecap="round"/>
+    </g>
+
+    <!-- Etykieta paska wyboru ze wskaźnikiem przewijania -->
+    <g transform="translate(366, 280)">
+      <text x="0" y="0" fill="#757575" class="font-base" font-size="11" font-weight="700" letter-spacing="1">WYBIERZ STACJĘ / ŹRÓDŁO</text>
+      <text x="394" y="0" fill="#4FC3F7" class="font-base" font-size="11" font-weight="600" text-anchor="end">PRZESUŃ ‹ ›</text>
+    </g>
+
+    <!-- POZIOMY PASEK WYBORU (PRZEWIJANA KARUZELA KASETEK) -->
+    <!-- Widoczny obszar roboczy paska: x: 366, w: 394, h: 62 -->
+    <g transform="translate(366, 296)">
+
+      <!-- Tło szyny selektora -->
+      <rect x="0" y="0" width="394" height="62" rx="12" fill="#151517" stroke="#2A2A2E" stroke-width="1"/>
+
+      <!-- Element 1: RADIO 357 (AKTYWNA - PODŚWIETLONA) -->
+      <g transform="translate(8, 7)" filter="url(#shadow-active-item)">
+        <rect x="0" y="0" width="132" height="48" rx="8" fill="#1C2F36" stroke="#00E5FF" stroke-width="1.5"/>
+        <!-- Aktywna fala radiowa -->
+        <rect x="12" y="19" width="3" height="10" rx="1" fill="#00E5FF"/>
+        <rect x="18" y="14" width="3" height="20" rx="1" fill="#00E5FF"/>
+        <rect x="24" y="21" width="3" height="6" rx="1" fill="#00E5FF"/>
+        <text x="34" y="29" fill="#00E5FF" class="font-base" font-size="12" font-weight="800">RADIO 357</text>
+      </g>
+
+      <!-- Element 2: NOWY ŚWIAT (Zwykła) -->
+      <g transform="translate(148, 7)">
+        <rect x="0" y="0" width="130" height="48" rx="8" fill="#202023" stroke="#333336" stroke-width="1"/>
+        <circle cx="20" cy="24" r="5" fill="#757575"/>
+        <text x="32" y="29" fill="#E0E0E0" class="font-base" font-size="12" font-weight="700">NOWY ŚWIAT</text>
+      </g>
+
+      <!-- Element 3: SPOTIFY (Zwykła - częściowo wysunięta, zachęca do przesunięcia) -->
+      <g transform="translate(286, 7)">
+        <rect x="0" y="0" width="130" height="48" rx="8" fill="#202023" stroke="#333336" stroke-width="1"/>
+        <circle cx="20" cy="24" r="5" fill="#1DB954"/>
+        <text x="32" y="29" fill="#E0E0E0" class="font-base" font-size="12" font-weight="700">SPOTIFY FAV</text>
+      </g>
+
+      <!-- Subtelny cień na prawej krawędzi sygnalizujący zawartość do przewinięcia -->
+      <rect x="360" y="1" width="33" height="60" rx="10" fill="url(#fade-right)" opacity="0.9" pointer-events="none"/>
+    </g>
+
+  </g>
+
+
+  <!-- 5. STAŁY DOLNY PASEK STATUSU (H: 58px) -->
+  <g transform="translate(0, 422)">
+    <rect x="0" y="0" width="800" height="58" fill="#141414"/>
+    <line x1="0" y1="0" x2="800" y2="0" stroke="#2A2A2A" stroke-width="1"/>
+
+    <!-- Lewa strona: Łączność (Wi-Fi 4 kreski + Domek HA) -->
+    <g transform="translate(18, 16)">
+      <g transform="translate(0, 4)">
+        <rect x="0" y="14" width="3.5" height="6" rx="1" fill="#00E5FF"/>
+        <rect x="5.5" y="10" width="3.5" height="10" rx="1" fill="#00E5FF"/>
+        <rect x="11" y="6" width="3.5" height="14" rx="1" fill="#00E5FF"/>
+        <rect x="16.5" y="1" width="3.5" height="19" rx="1" fill="#00E5FF"/>
+      </g>
+      <g transform="translate(32, 2)">
+        <path d="M12 2 L2 11 L5 11 L5 21 L19 21 L19 11 L22 11 Z" fill="#00E5FF"/>
+        <circle cx="12" cy="14" r="2.2" fill="#141414"/>
+        <circle cx="9" cy="17" r="1.5" fill="#141414"/>
+        <circle cx="15" cy="17" r="1.5" fill="#141414"/>
+        <line x1="12" y1="14" x2="9" y2="17" stroke="#141414" stroke-width="1.2"/>
+        <line x1="12" y1="14" x2="15" y2="17" stroke="#141414" stroke-width="1.2"/>
+      </g>
+    </g>
+
+    <!-- Środek: 4 pastylki stanów -->
+    <g transform="translate(98, 12)">
+      <rect x="0" y="0" width="66" height="32" rx="16" fill="#222224" stroke="#333336" stroke-width="1"/>
+      <circle cx="15" cy="16" r="5" fill="#00E676"/>
+      <text x="28" y="21" fill="#E0E0E0" class="font-base" font-size="11" font-weight="700">DOM</text>
+    </g>
+    <g transform="translate(172, 12)">
+      <rect x="0" y="0" width="68" height="32" rx="16" fill="#222224" stroke="#333336" stroke-width="1"/>
+      <circle cx="15" cy="16" r="5" fill="#00E676"/>
+      <text x="28" y="21" fill="#E0E0E0" class="font-base" font-size="11" font-weight="700">INFR</text>
+    </g>
+    <g transform="translate(248, 12)">
+      <rect x="0" y="0" width="72" height="32" rx="16" fill="#222224" stroke="#333336" stroke-width="1"/>
+      <circle cx="15" cy="16" r="5" fill="#FFA726"/>
+      <text x="28" y="21" fill="#E0E0E0" class="font-base" font-size="11" font-weight="700">BEZP</text>
+    </g>
+    <g transform="translate(328, 12)">
+      <rect x="0" y="0" width="94" height="32" rx="16" fill="#381919" stroke="#E53935" stroke-width="1.2"/>
+      <circle cx="15" cy="16" r="5" fill="#E53935"/>
+      <text x="27" y="21" fill="#FFCDD2" class="font-base" font-size="11" font-weight="700">OTWARTE</text>
+    </g>
+
+    <!-- Prawa strona: Stałe sloty -->
+    <g transform="translate(718, 18)">
+      <rect x="0" y="3" width="28" height="15" rx="3" fill="none" stroke="#FFA726" stroke-width="1.6"/>
+      <rect x="28" y="7" width="2.5" height="7" rx="1" fill="#FFA726"/>
+      <rect x="2.5" y="5.5" width="5.5" height="10" rx="1.5" fill="#FFA726"/>
+      <text x="36" y="16" fill="#FFA726" class="font-base" font-size="13" font-weight="800">15%</text>
+    </g>
+    <g transform="translate(678, 18)">
+      <path d="M2 7 L6 7 L12 2 L12 20 L6 15 L2 15 Z" fill="#E0E0E0"/>
+      <path d="M15 6 C17.5 8 17.5 14 15 16" stroke="#00E5FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M18 3 C22 6.5 22 15.5 18 19" stroke="#00E5FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(636, 17)">
+      <rect x="7" y="1" width="8" height="13" rx="4" fill="#00E676"/>
+      <path d="M3 8 C3 14 19 14 19 8 M11 15 L11 20 M6 20 L16 20" stroke="#00E676" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(594, 17)">
+      <circle cx="11" cy="12" r="8" fill="none" stroke="#00E5FF" stroke-width="1.8"/>
+      <line x1="5" y1="18" x2="3" y2="21" stroke="#00E5FF" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="17" y1="18" x2="19" y2="21" stroke="#00E5FF" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M4 6 C4 4 6 3 8 4" stroke="#00E5FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M18 6 C18 4 16 3 14 4" stroke="#00E5FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <polyline points="11,8 11,12 14,12" stroke="#00E5FF" stroke-width="1.5" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(552, 17)">
+      <path d="M11 2 A7 7 0 0 0 4 9 L4 14 L2 16 L20 16 L18 14 L18 9 A7 7 0 0 0 11 2 Z M9 17 A2 2 0 0 0 13 17" fill="#FFA726"/>
+    </g>
+  </g>
+</svg>

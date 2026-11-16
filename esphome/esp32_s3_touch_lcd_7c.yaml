@@ -1,0 +1,3488 @@
+﻿# ==============================================================================
+# Waveshare ESP32-S3-Touch-LCD-7C - Smart Home Touch Panel & Voice Hub
+# Hardware: Waveshare ESP32-S3-Touch-LCD-7C (800x480 Capacitive Touch, ES7210 AEC, ES8311, BQ27220)
+# Power: 5V/7-36V DC or 2x 18650 (1S2P) with BMS 1S protection
+# Firmware: ESPHome 2026.10.2 + LVGL 8 + Custom Audio Stack
+# Author: hookmt (https://github.com/hookmt)
+# ==============================================================================
+
+substitutions:
+  device_name: esp32-s3-touch-lcd-7c
+  friendly_name: "Touch LCD 7C Panel"
+  # Home Assistant entities (customize to your setup)
+  weather_entity: "weather.dom"
+  spider_media_player: "media_player.spider_one_audio_receiver_2"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: "Waveshare ESP32-S3-Touch-LCD-7C-BOX - candidate 1.15: Google Weather for panel weather display"
+  on_boot:
+    # Magistrala I2C (priorytet 1000) jest gotowa, a display/LVGL jeszcze nie.
+    - priority: 900
+      then:
+        - lambda: |-
+            const uint8_t direction[] = {0x02, 0x3F, 0x00};
+            const auto direction_error = id(bus_internal).write(0x24, direction, sizeof(direction));
+            if (direction_error != i2c::ERROR_OK) {
+              ESP_LOGE("ch32v006", "Nie udaĹ‚o siÄ™ ustawiÄ‡ kierunku EXIO (I2C 0x24), kod=%d", direction_error);
+              return;
+            }
+
+            // EXIO0 LCD_RST=LOW, EXIO1 CTP_RST=HIGH, EXIO2 backlight=LOW,
+            // EXIO3 PA_CTRL=LOW, EXIO4 SD_CS=HIGH, EXIO5 LCD_VDD_EN=HIGH.
+            const uint8_t outputs_reset[] = {0x03, 0x32, 0x00};
+            const auto reset_error = id(bus_internal).write(0x24, outputs_reset, sizeof(outputs_reset));
+            if (reset_error != i2c::ERROR_OK) {
+              ESP_LOGE("ch32v006", "Nie udaĹ‚o siÄ™ utrzymaÄ‡ LCD w resecie (I2C 0x24), kod=%d", reset_error);
+              return;
+            }
+
+            id(panel_exio_shadow) = 0x0032;
+            esphome::delay(30);
+
+            // Zwolnienie resetu LCD. PodĹ›wietlenie i wzmacniacz pozostajÄ… wyĹ‚Ä…czone.
+            const uint8_t outputs_released[] = {0x03, 0x33, 0x00};
+            const auto release_error = id(bus_internal).write(0x24, outputs_released, sizeof(outputs_released));
+            if (release_error != i2c::ERROR_OK) {
+              ESP_LOGE("ch32v006", "Nie udaĹ‚o siÄ™ zwolniÄ‡ resetu LCD (I2C 0x24), kod=%d", release_error);
+            } else {
+              id(panel_exio_shadow) = 0x0033;
+              ESP_LOGI("ch32v006", "CH32V006 skonfigurowany; LCD_RST zwolniony, PA_CTRL i podĹ›wietlenie wyĹ‚Ä…czone");
+            }
+
+    # Zastosuj zapamiÄ™tanÄ… jasnoĹ›Ä‡ dopiero po inicjalizacji ekranu i LVGL.
+    - priority: -100
+      then:
+        # Check after component initialization, before enabling the backlight.
+        # A valid result <= 3.2 V enters the same sleep path as a runtime reading.
+        - component.update: panel_battery_level
+        - lambda: id(panel_ui_ready) = true;
+        - script.execute: panel_refresh_active_tab_ui
+        - script.execute: panel_refresh_footer_ui
+        - script.execute: panel_apply_backlight
+        - script.execute: panel_refresh_battery_ui
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 32MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_SPIRAM_XIP_FROM_PSRAM: y
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: y
+    advanced:
+      enable_idf_experimental_features: true
+
+external_components:
+  - source: github://n-IA-hane/esphome-audio-stack@v2026.10.2
+    components:
+      - esp_afe
+  - source:
+      type: local
+      path: ../components
+    components: [esp_audio_stack]
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: INFO
+
+debug:
+  update_interval: 10s
+
+# No periodic wakeups. Reconnect external power and use RESET after charging.
+deep_sleep:
+  id: panel_battery_deep_sleep
+
+globals:
+  - id: panel_battery_shutdown
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # VA status inputs: 0 ready, 1 thinking, 2 listening, 3 response, 4 error.
+  - id: panel_va_event_phase
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: panel_va_run_ended
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: panel_va_audio_seen
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: panel_va_quiet_since
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: panel_va_display_state
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: panel_active_tab_index
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: panel_exio_shadow
+    type: uint16_t
+    restore_value: no
+    initial_value: '0x0032'
+  - id: panel_ui_ready
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: panel_clock_minute
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: panel_ww_chime_block
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  - id: panel_assist_phase
+    type: std::string
+    restore_value: no
+    initial_value: '"Gotowy"'
+
+  - id: panel_ha_connected
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: spider_selection_is_radio
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+esp_afe:
+  id: panel_afe
+  type: sr
+  mode: low_cost
+  mic_num: 2
+  se_enabled: true
+  aec_enabled: true
+  ns_enabled: false
+  agc_enabled: true
+  input_format: mmr
+  memory_alloc_mode: more_psram
+
+esp_audio_stack:
+  id: panel_audio_stack
+  processor_id: panel_afe
+  i2s_num: 1
+  sample_rate: 48000
+  # Dziedziczy poprawkÄ™ DMA z v0.59, zmianÄ… tej wersji jest kompaktowy widok Ĺ›wiateĹ‚.
+  dma_desc_num: 3
+  bits_per_sample: 16
+  slot_bit_width: 16
+  num_channels: 2
+  speaker_channels: 2
+  mclk_multiple: 256
+  i2s_mclk_pin: GPIO6
+  i2s_bclk_pin: GPIO44
+  i2s_lrclk_pin: GPIO16
+  i2s_din_pin: GPIO43
+  i2s_dout_pin: GPIO15
+  output_sample_rate: 16000
+  rx_slot_mode: stereo
+  rx_mic_slots: [left, right]
+  codec:
+    i2c_id: bus_internal
+    input:
+      type: es7210
+      address: 0x40
+      mic_selected: 0x03
+      gain_db: 24.0
+    output:
+      type: es8389
+      address: 0x10
+      use_mclk: true
+      no_dac_ref: false
+  on_amplifier_required:
+    then:
+      - lambda: |-
+          if (id(panel_battery_shutdown)) return;
+          const uint16_t state = id(panel_exio_shadow) | 0x0008;
+          const uint8_t bytes[] = {0x03, static_cast<uint8_t>(state), static_cast<uint8_t>(state >> 8)};
+          const auto result = id(bus_internal).write(0x24, bytes, sizeof(bytes));
+          if (result == i2c::ERROR_OK) id(panel_exio_shadow) = state;
+          ESP_LOGI("panel_audio", "v1.7 amp required: result=%d shadow=%04X", result, id(panel_exio_shadow));
+  on_amplifier_idle:
+    then:
+      - lambda: |-
+          const uint16_t state = id(panel_exio_shadow) & ~0x0008;
+          const uint8_t bytes[] = {0x03, static_cast<uint8_t>(state), static_cast<uint8_t>(state >> 8)};
+          const auto result = id(bus_internal).write(0x24, bytes, sizeof(bytes));
+          if (result == i2c::ERROR_OK) id(panel_exio_shadow) = state;
+          ESP_LOGI("panel_audio", "v1.7 amp idle: result=%d shadow=%04X", result, id(panel_exio_shadow));
+
+microphone:
+  - platform: esp_audio_stack
+    id: panel_mic
+
+speaker:
+  - platform: esp_audio_stack
+    id: panel_speaker
+    sample_rate: 48000
+    num_channels: 2
+    bits_per_sample: 16
+    buffer_duration: 1200ms
+  - platform: mixer
+    id: panel_mixer
+    output_speaker: panel_speaker
+    num_channels: 2
+    task_stack_in_psram: true
+    source_speakers:
+      - id: panel_announcement_speaker
+        timeout: 500ms
+      - id: panel_signal_speaker
+        buffer_duration: 40ms
+        timeout: 500ms
+
+media_source:
+  - platform: audio_http
+    id: panel_tts_source
+    buffer_size: 50000
+    persistent_ring_buffer: true
+    task_stack_in_psram: true
+
+# Lokalna encja jest wyĹ‚Ä…cznie wyjĹ›ciem komunikatĂłw Assist, budzika i minutnika.
+media_player:
+  - platform: speaker_source
+    id: spider2_player
+    name: "Spider 2"
+    volume_initial: 100%
+    volume_max: 100%
+    announcement_pipeline:
+      speaker: panel_announcement_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 2
+      sources:
+        - panel_tts_source
+    on_announcement:
+      - script.stop: panel_ww_restart
+      - micro_wake_word.stop:
+          id: panel_mww
+      - logger.log: "v1.7 TTS: announcement started"
+    on_state:
+      - script.execute: panel_va_status_refresh
+      - script.execute: panel_va_status_monitor
+      - if:
+          condition:
+            not:
+              media_player.is_announcing: spider2_player
+          then:
+            - script.execute: panel_ww_restart
+
+voice_assistant:
+  id: panel_assist
+  microphone: panel_mic
+  micro_wake_word: panel_mww
+  use_wake_word: false
+  media_player: spider2_player
+  noise_suppression_level: 0
+  auto_gain: 0dBFS
+  on_client_connected:
+    - logger.log: "v1.7 Assist: Home Assistant connected"
+    - lambda: |-
+        id(panel_ha_connected) = true;
+        id(panel_va_event_phase) = 0;
+        id(panel_va_run_ended) = false;
+        id(panel_va_audio_seen) = false;
+        id(panel_va_quiet_since) = 0;
+    - script.execute: panel_va_status_refresh
+    - micro_wake_word.enable_model: panel_model_alexa
+    - micro_wake_word.enable_model: panel_model_okay_nabu
+    - script.execute: panel_ww_restart
+  on_client_disconnected:
+    - logger.log: "v1.7 Assist: Home Assistant disconnected"
+    - script.stop: panel_va_status_monitor
+    - lambda: |-
+        id(panel_ha_connected) = false;
+        id(panel_va_event_phase) = 0;
+        id(panel_va_run_ended) = false;
+        id(panel_va_audio_seen) = false;
+        id(panel_va_quiet_since) = 0;
+    - script.execute: panel_va_status_refresh
+    - script.stop: panel_ww_restart
+    - micro_wake_word.stop:
+        id: panel_mww
+  on_start:
+    - script.stop: panel_ww_restart
+    - micro_wake_word.stop:
+        id: panel_mww
+    - logger.log: "v1.7 Assist: pipeline started"
+    - script.stop: panel_va_status_monitor
+    - lambda: |-
+        id(panel_va_event_phase) = 1;
+        id(panel_va_run_ended) = false;
+        id(panel_va_audio_seen) = false;
+        id(panel_va_quiet_since) = 0;
+    - script.execute: panel_va_status_refresh
+    - script.execute: panel_va_status_monitor
+  on_listening:
+    - logger.log: "v1.7 Assist: microphone listening"
+    - lambda: id(panel_va_event_phase) = 2;
+    - script.execute: panel_va_status_refresh
+    - script.execute: panel_va_status_monitor
+    # Kandydat: dodatkowy sygnaĹ‚ przy nasĹ‚uchu wyĹ‚Ä…czony.
+  on_stt_end:
+    - logger.log: "v1.7 Assist: speech-to-text finished"
+    - lambda: id(panel_va_event_phase) = 1;
+    - script.execute: panel_va_status_refresh
+    - script.execute: panel_va_status_monitor
+  on_tts_start:
+    - logger.log: "v1.7 Assist: TTS response started"
+    - lambda: |-
+        id(panel_va_event_phase) = 3;
+        id(panel_va_audio_seen) = false;
+        id(panel_va_quiet_since) = 0;
+    - script.execute: panel_va_status_refresh
+    - script.execute: panel_va_status_monitor
+    - script.execute: panel_tts_ui_window
+  on_tts_end:
+    - logger.log: "v1.7 Assist: TTS response generated"
+    - script.execute: panel_va_status_refresh
+    - script.execute: panel_va_status_monitor
+  on_end:
+    - logger.log: "v1.7 Assist: pipeline ended; reconcile current status"
+    - lambda: id(panel_va_run_ended) = true;
+    - script.execute: panel_va_status_refresh
+    - script.execute: panel_va_status_monitor
+    - script.execute: panel_ww_restart
+  on_error:
+    - logger.log: "v1.7 Assist: pipeline error"
+    - script.stop: panel_va_status_monitor
+    - lambda: |-
+        id(panel_va_event_phase) = 4;
+        id(panel_va_run_ended) = true;
+        id(panel_va_audio_seen) = false;
+        id(panel_va_quiet_since) = 0;
+    - script.execute: panel_va_status_refresh
+    - script.execute: panel_ww_restart
+# ZgodnoĹ›Ä‡ ze Spiderem: API bez szyfrowania, OTA bez hasĹ‚a i szyfrowania.
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+i2c:
+  - id: bus_internal
+    sda: GPIO47
+    scl: GPIO48
+    frequency: 100kHz
+    scan: true
+
+button:
+  # Manual sleep test on external power; RESET is required to resume operation.
+  - platform: template
+    name: "${friendly_name} test uspienia (RESET)"
+    id: panel_battery_sleep_test
+    entity_category: diagnostic
+    icon: mdi:power-sleep
+    on_press:
+      - script.execute: panel_battery_sleep
+  - platform: template
+    name: "${friendly_name} test gĹ‚oĹ›nika"
+    id: panel_speaker_test_button
+    icon: "mdi:speaker-play"
+    on_press:
+      - script.execute: panel_audio_test
+  - platform: template
+    name: "SODOM Panel 7C Assist"
+    id: panel_assist_button
+    icon: "mdi:microphone"
+    on_press:
+      - voice_assistant.start:
+          id: panel_assist
+  - platform: template
+    name: "SODOM Panel 7C Przerwij Assist"
+    id: panel_assist_abort_button
+    icon: mdi:microphone-off
+    on_press:
+      # voice_assistant.stop kieruje STOP wyĹ‚Ä…cznie do kanaĹ‚u ogĹ‚oszeĹ„ VA.
+      - voice_assistant.stop:
+          id: panel_assist
+
+script:
+  - id: panel_battery_sleep
+    mode: single
+    then:
+      - lambda: |-
+          id(panel_battery_shutdown) = true;
+          id(panel_ui_ready) = false;
+          ESP_LOGW("panel_battery", "v1.15 software sleep: U=%.3f V; reconnect power, charge, then RESET. BAT remains connected.", id(panel_battery_voltage).state);
+      - script.stop: panel_ww_restart
+      - script.stop: panel_va_status_monitor
+      - script.stop: panel_wake_chime_play
+      - script.stop: panel_audio_test
+      - micro_wake_word.stop:
+          id: panel_mww
+      - voice_assistant.stop:
+          id: panel_assist
+      - media_player.stop:
+          id: spider2_player
+          announcement: true
+      - lambda: |-
+          id(panel_signal_speaker).stop();
+          id(panel_announcement_speaker).stop();
+          // Mixer stops with its source speakers and output speaker.
+          id(panel_speaker).stop();
+          id(panel_mic).stop();
+      - lvgl.pause:
+          show_snow: false
+      - lambda: |-
+          // Existing outputs only: LCD/CTP reset LOW, backlight/PA/LCD HV rail OFF.
+          // Keep SD_CS HIGH and preserve the remaining expander outputs.
+          const uint16_t off = (id(panel_exio_shadow) & ~uint16_t(0x002F)) | uint16_t(0x0010);
+          const uint8_t bytes[] = {0x03, static_cast<uint8_t>(off), static_cast<uint8_t>(off >> 8)};
+          auto result = id(bus_internal).write(0x24, bytes, sizeof(bytes));
+          if (result != i2c::ERROR_OK)
+            result = id(bus_internal).write(0x24, bytes, sizeof(bytes));
+          if (result == i2c::ERROR_OK) {
+            id(panel_exio_shadow) = off;
+          } else {
+            ESP_LOGE("panel_battery", "v1.15 peripheral OFF failed: I2C=%d; hardware protection is required", result);
+          }
+      - deep_sleep.enter: panel_battery_deep_sleep
+
+  - id: panel_refresh_battery_ui
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(panel_ui_ready)) return false;
+              const float soc = id(panel_battery_level).state;
+              const int display = std::isfinite(soc) ? int(soc + 0.5f) : -1;
+              static int previous = -2;
+              if (display == previous) return false;
+              previous = display;
+              return true;
+          then:
+            - lvgl.label.update:
+                id: lbl_footer_battery_value
+                text: !lambda |-
+                  const float soc = id(panel_battery_level).state;
+                  if (!std::isfinite(soc)) return std::string("--%");
+                  char value[8];
+                  snprintf(value, sizeof(value), "%.0f%%", soc);
+                  return std::string(value);
+            - lvgl.label.update:
+                id: lbl_footer_battery_icon
+                text_color: !lambda |-
+                  const float soc = id(panel_battery_level).state;
+                  if (!std::isfinite(soc)) return lv_color_hex(0x8D969F);
+                  return lv_color_hex(soc <= 20.0f ? 0xFF5252 : 0x00E676);
+
+  # Etap I: dane HA sÄ… odbierane stale, kontrolki tylko na aktywnej karcie.
+  - id: panel_refresh_clock
+    mode: restart
+    parameters:
+      force_refresh: bool
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(panel_ui_ready) || id(panel_active_tab_index) != 0) return false;
+              const auto now = id(panel_ha_time).now();
+              if (!now.is_valid()) return false;
+              return force_refresh || (now.hour * 60 + now.minute) != id(panel_clock_minute);
+          then:
+            - lvgl.label.update:
+                id: lbl_clock_hour_tens
+                text: !lambda |-
+                  const auto now = id(panel_ha_time).now();
+                  char value[3];
+                  snprintf(value, sizeof(value), "%02d", now.hour);
+                  return std::string(1, value[0]);
+            - lvgl.label.update:
+                id: lbl_clock_hour_ones
+                text: !lambda |-
+                  const auto now = id(panel_ha_time).now();
+                  char value[3];
+                  snprintf(value, sizeof(value), "%02d", now.hour);
+                  return std::string(1, value[1]);
+            - lvgl.label.update:
+                id: lbl_clock_minute_tens
+                text: !lambda |-
+                  const auto now = id(panel_ha_time).now();
+                  char value[3];
+                  snprintf(value, sizeof(value), "%02d", now.minute);
+                  return std::string(1, value[0]);
+            - lvgl.label.update:
+                id: lbl_clock_minute_ones
+                text: !lambda |-
+                  const auto now = id(panel_ha_time).now();
+                  char value[3];
+                  snprintf(value, sizeof(value), "%02d", now.minute);
+                  return std::string(1, value[1]);
+            - lvgl.label.update:
+                id: lbl_clock_weekday
+                text: !lambda |-
+                  const auto now = id(panel_ha_time).now();
+                  static const char *weekdays[] = {"", "NIEDZIELA", "PONIEDZIAĹEK", "WTOREK", "ĹšRODA", "CZWARTEK", "PIÄ„TEK", "SOBOTA"};
+                  if (now.day_of_week < 1 || now.day_of_week > 7) return std::string("--");
+                  return std::string(weekdays[now.day_of_week]);
+            - lvgl.label.update:
+                id: lbl_clock_date
+                text: !lambda |-
+                  const auto now = id(panel_ha_time).now();
+                  static const char *months[] = {"", "stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca", "lipca", "sierpnia", "wrzeĹ›nia", "paĹşdziernika", "listopada", "grudnia"};
+                  char value[32];
+                  if (now.month < 1 || now.month > 12) {
+                    snprintf(value, sizeof(value), "%02d.%02d.%04d", now.day_of_month, now.month, now.year);
+                  } else {
+                    snprintf(value, sizeof(value), "%02d %s %04d", now.day_of_month, months[now.month], now.year);
+                  }
+                  return std::string(value);
+
+            - lambda: |-
+                const auto now = id(panel_ha_time).now();
+                id(panel_clock_minute) = now.hour * 60 + now.minute;
+
+  - id: panel_refresh_dom_ui
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(panel_ui_ready) && id(panel_active_tab_index) == 0;
+          then:
+            - lvgl.label.update:
+                id: lbl_weather_icon
+                text: !lambda |-
+                  if (!id(panel_weather_condition).has_state()) return std::string("\U000F0590");
+                  const auto state = id(panel_weather_condition).state;
+                  if (state == "clear-night") return std::string("\U000F0594");
+                  if (state == "sunny") return std::string("\U000F0599");
+                  if (state == "partlycloudy") return std::string("\U000F0595");
+                  if (state == "cloudy") return std::string("\U000F0590");
+                  if (state == "rainy") return std::string("\U000F0597");
+                  if (state == "pouring") return std::string("\U000F0596");
+                  if (state == "fog") return std::string("\U000F0591");
+                  if (state == "snowy") return std::string("\U000F0598");
+                  if (state == "windy" || state == "windy-variant") return std::string("\U000F059D");
+                  return std::string("\U000F0590");
+            - lvgl.label.update:
+                id: lbl_weather_temp
+                text: !lambda |-
+                  if (!id(panel_weather_temp).has_state()) return std::string("--.-Â°C");
+                  char value[16];
+                  snprintf(value, sizeof(value), "%.1fÂ°C", id(panel_weather_temp).state);
+                  return std::string(value);
+            - lvgl.label.update:
+                id: lbl_weather_condition
+                text: !lambda |-
+                  if (!id(panel_weather_condition).has_state()) return std::string("BRAK DANYCH POGODOWYCH");
+                  const auto state = id(panel_weather_condition).state;
+                  if (state == "clear-night") return std::string("BEZCHMURNA NOC");
+                  if (state == "sunny") return std::string("SĹONECZNIE");
+                  if (state == "partlycloudy") return std::string("CZÄĹšCIOWE ZACHMURZENIE");
+                  if (state == "cloudy") return std::string("POCHMURNO");
+                  if (state == "rainy") return std::string("DESZCZ");
+                  if (state == "pouring") return std::string("ULEWA");
+                  if (state == "fog") return std::string("MGĹA");
+                  if (state == "snowy") return std::string("ĹšNIEG");
+                  if (state == "windy") return std::string("WIETRZNIE");
+                  if (state == "windy-variant") return std::string("WIETRZNIE I POCHMURNO");
+                  return state;
+            - lvgl.label.update:
+                id: lbl_weather_humidity
+                text: !lambda |-
+                  if (!id(panel_weather_humidity).has_state()) return std::string("--%");
+                  char value[12];
+                  snprintf(value, sizeof(value), "%.0f%%", id(panel_weather_humidity).state);
+                  return std::string(value);
+            - lvgl.label.update:
+                id: lbl_weather_feels_like
+                text: !lambda |-
+                  if (!id(panel_weather_feels_like).has_state()) return std::string("--.-Â°C");
+                  char value[16];
+                  snprintf(value, sizeof(value), "%.1fÂ°C", id(panel_weather_feels_like).state);
+                  return std::string(value);
+            - lvgl.label.update:
+                id: lbl_weather_pressure
+                text: !lambda |-
+                  if (!id(panel_weather_pressure).has_state()) return std::string("---- hPa");
+                  char value[16];
+                  snprintf(value, sizeof(value), "%.0f hPa", id(panel_weather_pressure).state);
+                  return std::string(value);
+            - lvgl.label.update:
+                id: lbl_weather_wind
+                text: !lambda |-
+                  if (!id(panel_weather_wind).has_state()) return std::string("--.- km/h");
+                  char value[20];
+                  snprintf(value, sizeof(value), "%.1f km/h", id(panel_weather_wind).state);
+                  return std::string(value);
+
+  - id: panel_refresh_bedroom_ui
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(panel_ui_ready) && id(panel_active_tab_index) == 2;
+          then:
+            - lvgl.label.update:
+                id: lbl_state_kula
+                text: !lambda |-
+                  if (!id(panel_light_bed_kula).has_state()) return std::string("BRAK DANYCH");
+                  if (id(panel_light_bed_kula).state == "on") return std::string("");
+                  if (id(panel_light_bed_kula).state == "off") return std::string("WYĹÄ„CZONA");
+                  return std::string("BRAK DANYCH");
+                text_color: !lambda |-
+                  if (!id(panel_light_bed_kula).has_state()) return lv_color_hex(0x8D969F);
+                  return lv_color_hex(id(panel_light_bed_kula).state == "on" ? 0xFFFFFF : 0xAAB2BB);
+            - lvgl.label.update:
+                id: lbl_state_led
+                text: !lambda |-
+                  if (!id(panel_light_bed_led).has_state()) return std::string("BRAK DANYCH");
+                  if (id(panel_light_bed_led).state == "on") return std::string("");
+                  if (id(panel_light_bed_led).state == "off") return std::string("WYĹÄ„CZONA");
+                  return std::string("BRAK DANYCH");
+                text_color: !lambda |-
+                  if (!id(panel_light_bed_led).has_state()) return lv_color_hex(0x8D969F);
+                  return lv_color_hex(id(panel_light_bed_led).state == "on" ? 0xFFFFFF : 0xAAB2BB);
+            - lvgl.label.update:
+                id: lbl_state_night_lamp
+                text: !lambda |-
+                  if (!id(panel_light_bed_lamp).has_state()) return std::string("BRAK DANYCH");
+                  if (id(panel_light_bed_lamp).state == "on") return std::string("");
+                  if (id(panel_light_bed_lamp).state == "off") return std::string("WYĹÄ„CZONA");
+                  return std::string("BRAK DANYCH");
+                text_color: !lambda |-
+                  if (!id(panel_light_bed_lamp).has_state()) return lv_color_hex(0x8D969F);
+                  return lv_color_hex(id(panel_light_bed_lamp).state == "on" ? 0xFFFFFF : 0xAAB2BB);
+            - lvgl.widget.update:
+                id: btn_bed_kula
+                bg_color: !lambda |-
+                  if (!id(panel_light_bed_kula).has_state()) return lv_color_hex(0x3A3E44);
+                  return lv_color_hex(id(panel_light_bed_kula).state == "on" ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_bed_kula).has_state()) return lv_color_hex(0x6A727B);
+                  return lv_color_hex(id(panel_light_bed_kula).state == "on" ? 0xFF9800 : 0x59636D);
+            - lvgl.widget.update:
+                id: btn_bed_led
+                bg_color: !lambda |-
+                  if (!id(panel_light_bed_led).has_state()) return lv_color_hex(0x3A3E44);
+                  return lv_color_hex(id(panel_light_bed_led).state == "on" ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_bed_led).has_state()) return lv_color_hex(0x6A727B);
+                  return lv_color_hex(id(panel_light_bed_led).state == "on" ? 0xFF9800 : 0x59636D);
+            - lvgl.widget.update:
+                id: btn_bed_night_lamp
+                bg_color: !lambda |-
+                  if (!id(panel_light_bed_lamp).has_state()) return lv_color_hex(0x3A3E44);
+                  return lv_color_hex(id(panel_light_bed_lamp).state == "on" ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_bed_lamp).has_state()) return lv_color_hex(0x6A727B);
+                  return lv_color_hex(id(panel_light_bed_lamp).state == "on" ? 0xFF9800 : 0x59636D);
+
+  - id: panel_refresh_home_ui
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(panel_ui_ready) && id(panel_active_tab_index) == 3;
+          then:
+            - lvgl.widget.update:
+                id: btn_room_salon
+                bg_color: !lambda |-
+                  if (!id(panel_light_home_salon).has_state()) return lv_color_hex(0x3A3E44);
+                  return lv_color_hex(id(panel_light_home_salon).state == "on" ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_home_salon).has_state()) return lv_color_hex(0x6A727B);
+                  return lv_color_hex(id(panel_light_home_salon).state == "on" ? 0xFF9800 : 0x59636D);
+            - lvgl.widget.update:
+                id: btn_room_studio
+                bg_color: !lambda |-
+                  if (!id(panel_light_home_studio).has_state()) return lv_color_hex(0x3A3E44);
+                  return lv_color_hex(id(panel_light_home_studio).state == "on" ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_home_studio).has_state()) return lv_color_hex(0x6A727B);
+                  return lv_color_hex(id(panel_light_home_studio).state == "on" ? 0xFF9800 : 0x59636D);
+            - lvgl.widget.update:
+                id: btn_room_bedroom
+                bg_color: !lambda |-
+                  if (!id(panel_light_bed_kula).has_state() || !id(panel_light_bed_led).has_state() || !id(panel_light_bed_lamp).has_state()) return lv_color_hex(0x3A3E44);
+                  const bool on = id(panel_light_bed_kula).state == "on" || id(panel_light_bed_led).state == "on" || id(panel_light_bed_lamp).state == "on";
+                  return lv_color_hex(on ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_bed_kula).has_state() || !id(panel_light_bed_led).has_state() || !id(panel_light_bed_lamp).has_state()) return lv_color_hex(0x6A727B);
+                  const bool on = id(panel_light_bed_kula).state == "on" || id(panel_light_bed_led).state == "on" || id(panel_light_bed_lamp).state == "on";
+                  return lv_color_hex(on ? 0xFF9800 : 0x59636D);
+            - lvgl.widget.update:
+                id: btn_room_hall
+                bg_color: !lambda |-
+                  if (!id(panel_light_home_hall_1).has_state() || !id(panel_light_home_hall_2).has_state() || !id(panel_light_home_hall_3).has_state()) return lv_color_hex(0x3A3E44);
+                  const bool on = id(panel_light_home_hall_1).state == "on" || id(panel_light_home_hall_2).state == "on" || id(panel_light_home_hall_3).state == "on";
+                  return lv_color_hex(on ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_home_hall_1).has_state() || !id(panel_light_home_hall_2).has_state() || !id(panel_light_home_hall_3).has_state()) return lv_color_hex(0x6A727B);
+                  const bool on = id(panel_light_home_hall_1).state == "on" || id(panel_light_home_hall_2).state == "on" || id(panel_light_home_hall_3).state == "on";
+                  return lv_color_hex(on ? 0xFF9800 : 0x59636D);
+            - lvgl.widget.update:
+                id: btn_room_bathroom
+                bg_color: !lambda |-
+                  if (!id(panel_light_home_bathroom).has_state()) return lv_color_hex(0x3A3E44);
+                  return lv_color_hex(id(panel_light_home_bathroom).state == "on" ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_home_bathroom).has_state()) return lv_color_hex(0x6A727B);
+                  return lv_color_hex(id(panel_light_home_bathroom).state == "on" ? 0xFF9800 : 0x59636D);
+            - lvgl.widget.update:
+                id: btn_room_wc
+                bg_color: !lambda |-
+                  if (!id(panel_light_home_wc).has_state()) return lv_color_hex(0x3A3E44);
+                  return lv_color_hex(id(panel_light_home_wc).state == "on" ? 0x563315 : 0x292D32);
+                border_color: !lambda |-
+                  if (!id(panel_light_home_wc).has_state()) return lv_color_hex(0x6A727B);
+                  return lv_color_hex(id(panel_light_home_wc).state == "on" ? 0xFF9800 : 0x59636D);
+
+  - id: panel_refresh_footer_ui
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(panel_ui_ready);
+          then:
+            - lvgl.widget.update:
+                id: status_home_chip
+                bg_color: !lambda |-
+                  if (!id(panel_home_state).has_state()) return lv_color_hex(0x66717D);
+                  const auto state = id(panel_home_state).state;
+                  if (state == "OK") return lv_color_hex(0x1D7046);
+                  if (state == "UWAGA") return lv_color_hex(0xA85000);
+                  if (state == "BLAD" || state == "KRYTYCZNE") return lv_color_hex(0xA32222);
+                  return lv_color_hex(0x66717D);
+            - lvgl.label.update:
+                id: lbl_status_home
+                text: !lambda |-
+                  if (!id(panel_home_state).has_state()) return std::string("DOM ?");
+                  const auto state = id(panel_home_state).state;
+                  if (state == "OK") return std::string("DOM OK");
+                  if (state == "UWAGA") return std::string("DOM");
+                  return std::string("DOM BĹÄ„D");
+                text_color: 0xFFFFFF
+            - lvgl.widget.update:
+                id: status_infra_chip
+                bg_color: !lambda |-
+                  if (!id(panel_infra_state).has_state()) return lv_color_hex(0x66717D);
+                  const auto state = id(panel_infra_state).state;
+                  if (state == "OK") return lv_color_hex(0x1D7046);
+                  if (state == "UWAGA") return lv_color_hex(0xA85000);
+                  if (state == "BLAD" || state == "KRYTYCZNE") return lv_color_hex(0xA32222);
+                  return lv_color_hex(0x66717D);
+            - lvgl.label.update:
+                id: lbl_status_infra
+                text: !lambda |-
+                  if (!id(panel_infra_state).has_state()) return std::string("INFRA ?");
+                  const auto state = id(panel_infra_state).state;
+                  if (state == "OK") return std::string("INFRA OK");
+                  if (state == "UWAGA") return std::string("INFRA");
+                  return std::string("INFRA");
+                text_color: 0xFFFFFF
+            - lvgl.widget.update:
+                id: status_doors_chip
+                bg_color: !lambda |-
+                  if (!id(panel_entry_open).has_state() || !id(panel_balcony_open).has_state()) return lv_color_hex(0x66717D);
+                  return lv_color_hex((id(panel_entry_open).state || id(panel_balcony_open).state) ? 0x00757A : 0x20262D);
+            - lvgl.label.update:
+                id: lbl_status_doors
+                text: !lambda |-
+                  if (!id(panel_entry_open).has_state() || !id(panel_balcony_open).has_state()) return std::string("DRZWI ?");
+                  return std::string((id(panel_entry_open).state || id(panel_balcony_open).state) ? "OTWARTE" : "ZAMK.");
+                text_color: 0xFFFFFF
+            - script.execute: panel_va_status_refresh
+            - lvgl.label.update:
+                id: lbl_footer_wifi
+                text: !lambda |-
+                  char value[24];
+                  if (id(panel_wifi_signal).has_state()) {
+                    snprintf(value, sizeof(value), "%.0f dBm", id(panel_wifi_signal).state);
+                  } else {
+                    snprintf(value, sizeof(value), "-- dBm");
+                  }
+                  return std::string(value);
+            - lvgl.label.update:
+                id: lbl_footer_ha_dot
+                text_color: !lambda |-
+                  return lv_color_hex(id(panel_ha_connected) ? 0x40C4FF : 0x8D969F);
+            - lvgl.label.update:
+                id: lbl_footer_mic
+                text_color: !lambda |-
+                  return lv_color_hex(id(panel_ww_enabled).state ? 0x00E676 : 0x8D969F);
+            - lvgl.label.update:
+                id: lbl_footer_alarm
+                text: !lambda |-
+                  if (!id(panel_budzik_state).has_state()) return std::string("");
+                  return id(panel_budzik_state).state == "1970-01-01 00:00:00" ? std::string("") : std::string("\U000F0020");
+            - lvgl.label.update:
+                id: lbl_footer_timer
+                text: !lambda |-
+                  if (!id(panel_timer_state).has_state()) return std::string("");
+                  const auto state = id(panel_timer_state).state;
+                  return (state == "active" || state == "paused") ? std::string("\U000F009A") : std::string("");
+
+  - id: panel_refresh_audio_ui
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(panel_ui_ready) && id(panel_active_tab_index) == 1;
+          then:
+            - lvgl.label.update:
+                id: lbl_spider_track
+                text: !lambda 'return id(spider_media_title).has_state() ? id(spider_media_title).state : std::string("--");'
+            - lvgl.label.update:
+                id: lbl_spider_artist
+                text: !lambda 'return id(spider_media_artist).has_state() ? id(spider_media_artist).state : std::string("");'
+            - lvgl.label.update:
+                id: lbl_player_status
+                text: !lambda |-
+                  if (!id(spider_media_state).has_state()) return std::string("Spider: brak danych");
+                  const auto &state = id(spider_media_state).state;
+                  return std::string(state == "playing" ? "Spider: gra" : (state == "paused" ? "Spider: pauza" : "Spider: gotowy"));
+
+  - id: panel_refresh_active_tab_ui
+    mode: restart
+    then:
+      - script.execute:
+          id: panel_refresh_clock
+          force_refresh: true
+      - script.execute: panel_refresh_dom_ui
+      - script.execute: panel_refresh_audio_ui
+      - script.execute: panel_refresh_media_list
+      - script.execute: panel_refresh_bedroom_ui
+      - script.execute: panel_refresh_home_ui
+
+  - id: panel_apply_backlight
+    mode: restart
+    then:
+      - lambda: |-
+          if (id(panel_battery_shutdown)) return;
+          const int requested = static_cast<int>(id(panel_lcd_brightness).state + 0.5f);
+          if (requested <= 0) {
+            const uint16_t state = id(panel_exio_shadow) & ~0x0004;
+            const uint8_t bytes[] = {0x03, static_cast<uint8_t>(state), static_cast<uint8_t>(state >> 8)};
+            const auto result = id(bus_internal).write(0x24, bytes, sizeof(bytes));
+            if (result == i2c::ERROR_OK) {
+              id(panel_exio_shadow) = state;
+              ESP_LOGI("ch32v006", "LCD backlight OFF, brightness=0%%");
+            } else {
+              ESP_LOGE("ch32v006", "Nie udaĹ‚o siÄ™ wyĹ‚Ä…czyÄ‡ podĹ›wietlenia, kod=%d", result);
+            }
+            return;
+          }
+
+          // Suwak 0 wyĹ‚Ä…cza podĹ›wietlenie; 1-100 mapuje niezerowe PWM 1-255.
+          const int brightness = requested < 1 ? 1 : (requested > 100 ? 100 : requested);
+          const uint8_t pwm_value = static_cast<uint8_t>(1 + ((brightness - 1) * 254 + 49) / 99);
+          const uint8_t pwm_bytes[] = {0x05, pwm_value};
+          const auto pwm_result = id(bus_internal).write(0x24, pwm_bytes, sizeof(pwm_bytes));
+          if (pwm_result != i2c::ERROR_OK) {
+            ESP_LOGE("ch32v006", "Nie udaĹ‚o siÄ™ ustawiÄ‡ PWM podĹ›wietlenia na %d%%, kod=%d", requested, pwm_result);
+            return;
+          }
+
+          const uint16_t state = id(panel_exio_shadow) | 0x0004;
+          const uint8_t output_bytes[] = {0x03, static_cast<uint8_t>(state), static_cast<uint8_t>(state >> 8)};
+          const auto output_result = id(bus_internal).write(0x24, output_bytes, sizeof(output_bytes));
+          if (output_result == i2c::ERROR_OK) {
+            id(panel_exio_shadow) = state;
+            ESP_LOGI("ch32v006", "LCD backlight ON, jasnoĹ›Ä‡=%d%%, PWM=%u, EXIO shadow=%04X",
+                     requested, pwm_bytes[1], state);
+          } else {
+            ESP_LOGE("ch32v006", "Nie udaĹ‚o siÄ™ wĹ‚Ä…czyÄ‡ podĹ›wietlenia, kod=%d", output_result);
+          }
+
+  - id: panel_ww_restart
+    mode: restart
+    then:
+      - delay: 1500ms
+      - wait_until:
+          condition:
+            and:
+              - lambda: return id(panel_ha_connected) && !id(panel_battery_shutdown);
+              - switch.is_on: panel_ww_enabled
+              - not:
+                  voice_assistant.is_running:
+                    id: panel_assist
+              - not:
+                  media_player.is_announcing: spider2_player
+          timeout: 60s
+      - if:
+          condition:
+            and:
+              - lambda: return id(panel_ha_connected) && !id(panel_battery_shutdown);
+              - switch.is_on: panel_ww_enabled
+              - not:
+                  voice_assistant.is_running:
+                    id: panel_assist
+              - not:
+                  media_player.is_announcing: spider2_player
+              - not:
+                  micro_wake_word.is_running:
+                    id: panel_mww
+          then:
+            - micro_wake_word.start:
+                id: panel_mww
+            - logger.log:
+                level: INFO
+                format: "v1.7 WW listening: Alexa / Okay Nabu"
+  - id: panel_wake_chime_play
+    mode: single
+    then:
+      - lambda: |-
+          id(panel_ww_chime_block) = 0;
+          id(panel_signal_speaker).set_audio_stream_info(audio::AudioStreamInfo(16, 2, 48000));
+          id(panel_signal_speaker).start();
+          id(panel_speaker).start();
+          ESP_LOGI("panel_audio", "v1.7 WW chime: starting generated two-tone");
+      - wait_until:
+          condition:
+            lambda: return id(panel_signal_speaker).is_running() && id(panel_speaker).is_running();
+          timeout: 3s
+      - if:
+          condition:
+            lambda: return id(panel_signal_speaker).is_running() && id(panel_speaker).is_running();
+          then:
+            - repeat:
+                count: 18
+                then:
+                  - lambda: |-
+                      // 10 ms stereo PCM blocks; reuse the tested signal-speaker/mixer path.
+                      static uint8_t pcm[1920];
+                      const int block = id(panel_ww_chime_block);
+                      const int frequency = block < 8 ? 660 : (block < 10 ? 0 : 880);
+                      for (int i = 0; i < 480; ++i) {
+                        int16_t sample = 0;
+                        if (frequency != 0) {
+                          const uint64_t sample_index = static_cast<uint64_t>(block * 480 + i);
+                          const uint32_t half_wave = static_cast<uint32_t>((sample_index * frequency * 2) / 48000);
+                          sample = (half_wave & 1) ? -5200 : 5200;
+                        }
+                        const uint16_t value = static_cast<uint16_t>(sample);
+                        const int offset = i * 4;
+                        pcm[offset] = pcm[offset + 2] = static_cast<uint8_t>(value & 0xFF);
+                        pcm[offset + 1] = pcm[offset + 3] = static_cast<uint8_t>(value >> 8);
+                      }
+                      const size_t written = id(panel_signal_speaker).play(pcm, sizeof(pcm));
+                      if (written != sizeof(pcm)) {
+                        ESP_LOGW("panel_audio", "v1.7 WW chime partial write: %u/1920", unsigned(written));
+                      }
+                      id(panel_ww_chime_block) = block + 1;
+                  - delay: 10ms
+            - speaker.finish: panel_signal_speaker
+            - delay: 120ms
+            - logger.log: "v1.7 WW chime: two-tone drained"
+          else:
+            - speaker.stop: panel_signal_speaker
+            - logger.log:
+                level: WARN
+                format: "v1.7 WW chime: speaker start timeout"
+  - id: panel_tts_ui_window
+    mode: restart
+    then:
+      # PrĂłba A/B: LVGL dziaĹ‚a takĹĽe przy starcie TTS.
+      # Bez pause/resume i wymuszanego przez resume odrysowania caĹ‚ego ekranu.
+      - logger.log:
+          level: INFO
+          format: "v1.7 TTS UI test: continuous LVGL, no pause/resume"
+  # Reconcile from current inputs, never from the text left on the screen.
+  - id: panel_va_status_refresh
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(panel_ui_ready)) return false;
+              const bool connected = id(panel_ha_connected);
+              const bool running = id(panel_assist).is_running();
+              const auto player = id(spider2_player).state;
+              const bool playing = player == media_player::MEDIA_PLAYER_STATE_PLAYING ||
+                                   player == media_player::MEDIA_PLAYER_STATE_ANNOUNCING;
+              const bool idle = player == media_player::MEDIA_PLAYER_STATE_IDLE;
+              const uint32_t now = millis();
+              int phase = id(panel_va_event_phase);
+              if (connected && phase == 3) {
+                if (playing) id(panel_va_audio_seen) = true;
+                // Start the existing margin only after observed audio, idle and VA end.
+                if (id(panel_va_audio_seen) && idle && !running && id(panel_va_run_ended)) {
+                  if (id(panel_va_quiet_since) == 0) id(panel_va_quiet_since) = now;
+                  if (uint32_t(now - id(panel_va_quiet_since)) >= 2500) phase = 0;
+                } else {
+                  id(panel_va_quiet_since) = 0;
+                }
+              } else if (connected && (phase == 1 || phase == 2) &&
+                         id(panel_va_run_ended) && !running && idle) {
+                phase = 0;  // Completed command without a spoken TTS response.
+              }
+              id(panel_va_event_phase) = phase;
+              int display = connected ? phase : 5;
+              if (display == 0 && !id(panel_ww_enabled).state) display = 6;
+              if (display == id(panel_va_display_state)) return false;
+              id(panel_va_display_state) = display;
+              switch (display) {
+                case 0: id(panel_assist_phase) = "Alexa / Okay Nabu: czuwam"; break;
+                case 1: id(panel_assist_phase) = "Mowa rozpoznana"; break;
+                case 2: id(panel_assist_phase) = "Slucham..."; break;
+                case 3: id(panel_assist_phase) = "Odpowiadam..."; break;
+                case 4: id(panel_assist_phase) = "Blad Assist"; break;
+                case 5: id(panel_assist_phase) = "HA rozlaczone"; break;
+                case 6: id(panel_assist_phase) = "WW wylaczone"; break;
+              }
+              ESP_LOGI("va_status", "v1.7 display=%d va=%d end=%d player=%d seen=%d",
+                       display, running, id(panel_va_run_ended), int(player), id(panel_va_audio_seen));
+              return true;
+          then:
+            - lvgl.widget.update:
+                id: status_va_chip
+                bg_color: !lambda |-
+                  switch (id(panel_va_display_state)) {
+                    case 1: return lv_color_hex(0xA85000);
+                    case 2: return lv_color_hex(0x145AA0);
+                    case 3: return lv_color_hex(0x177A3B);
+                    case 4: return lv_color_hex(0x9A2F2F);
+                    case 5: return lv_color_hex(0x66717D);
+                    default: return lv_color_hex(0x20262D);
+                  }
+            - lvgl.label.update:
+                id: lbl_status_va
+                text: !lambda |-
+                  switch (id(panel_va_display_state)) {
+                    case 1: return std::string("MYĹšLI");
+                    case 2: return std::string("SĹUCHA");
+                    case 3: return std::string("ODPOWIADA");
+                    case 4: return std::string("BĹÄ„D");
+                    case 5: return std::string("HA ?");
+                    case 6: return std::string("WW OFF");
+                    default: return std::string("CZUWA");
+                  }
+                text_color: 0xFFFFFF
+
+  - id: panel_va_status_monitor
+    mode: single
+    then:
+      # Events do not restart the delay: a busy player cannot starve the 1 s check.
+      # New Assist start explicitly cancels the old monitor and resets its inputs.
+      - repeat:
+          count: 180
+          then:
+            - delay: 1s
+            - script.execute: panel_va_status_refresh
+            - if:
+                condition:
+                  lambda: return !id(panel_ha_connected) || id(panel_va_event_phase) == 0 || id(panel_va_event_phase) == 4;
+                then:
+                  - script.stop: panel_va_status_monitor
+      # A timeout is not proof of completed audio. Keep the last state and report it.
+      - logger.log:
+          level: WARN
+          format: "v1.7 VA status: 180 s check limit; phase=%d va=%d end=%d player=%d seen=%d"
+          args: ['id(panel_va_event_phase)', 'id(panel_assist).is_running()', 'id(panel_va_run_ended)', 'int(id(spider2_player).state)', 'id(panel_va_audio_seen)']
+
+  - id: panel_open_media_list
+    mode: restart
+    parameters:
+      is_radio: bool
+    then:
+      - lambda: id(spider_selection_is_radio) = is_radio;
+      - lvgl.label.update:
+          id: lbl_spider_selection_title
+          text: !lambda |-
+            return id(spider_selection_is_radio)
+              ? std::string("RADIO  /  WYBIERZ STACJÄ")
+              : std::string("SPOTIFY  /  PLAYLISTY");
+      - script.execute: panel_refresh_media_list
+      - lvgl.widget.show: spider_selection_overlay
+
+  - id: panel_refresh_media_list
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(panel_ui_ready) && id(panel_active_tab_index) == 1;
+          then:
+            - lambda: |-
+                lv_obj_t *buttons[] = {
+                  id(btn_spider_choice_01), id(btn_spider_choice_02),
+                  id(btn_spider_choice_03), id(btn_spider_choice_04),
+                  id(btn_spider_choice_05), id(btn_spider_choice_06),
+                  id(btn_spider_choice_07), id(btn_spider_choice_08),
+                  id(btn_spider_choice_09), id(btn_spider_choice_10),
+                  id(btn_spider_choice_11), id(btn_spider_choice_12)
+                };
+                lv_obj_t *labels[] = {
+                  id(lbl_spider_choice_01), id(lbl_spider_choice_02),
+                  id(lbl_spider_choice_03), id(lbl_spider_choice_04),
+                  id(lbl_spider_choice_05), id(lbl_spider_choice_06),
+                  id(lbl_spider_choice_07), id(lbl_spider_choice_08),
+                  id(lbl_spider_choice_09), id(lbl_spider_choice_10),
+                  id(lbl_spider_choice_11), id(lbl_spider_choice_12)
+                };
+
+                const char *radio_defaults[] = {
+                  "Anty Radio", "Antyradio Hard", "ESKA ROCK", "Radio 357",
+                  "Radio Nowy Ĺšwiat", "Radio Zet", "RMF FM", "TokFM",
+                  "Radio Plus", "PR TRĂ“JKA", "Chilli Zet",
+                  "Zak - stidenckie radio Politechniki ĹĂłdzkiej"
+                };
+                const char *playlist_defaults[] = {
+                  "Liked Songs hook_mt", "500 Random tracks (from library)",
+                  "Folk Metal", "Electro", "Audio test",
+                  "Odkryj w tym tygodniu", "\"LubiÄ™ to\" z radia",
+                  "Melodic Death Metal 2020", "Hity z radia 2026",
+                  "All favorited tracks"
+                };
+
+                const bool use_radio = id(spider_selection_is_radio);
+                const std::string raw = use_radio
+                  ? (id(spider_radio_options).has_state() ? id(spider_radio_options).state : std::string())
+                  : (id(spider_playlist_options).has_state() ? id(spider_playlist_options).state : std::string());
+                const bool use_defaults = raw.empty() || raw == "unknown" || raw == "unavailable";
+                const char *const *defaults = use_radio ? radio_defaults : playlist_defaults;
+                const size_t default_count = use_radio ? 12 : 10;
+
+                size_t cursor = 0;
+                for (size_t i = 0; i < 12; ++i) {
+                  std::string item;
+                  if (use_defaults) {
+                    if (i < default_count) item = defaults[i];
+                  } else if (cursor <= raw.size()) {
+                    const size_t separator = raw.find('~', cursor);
+                    const size_t end = separator == std::string::npos ? raw.size() : separator;
+                    item = raw.substr(cursor, end - cursor);
+                    cursor = separator == std::string::npos ? raw.size() + 1 : separator + 1;
+                  }
+
+                  if (item.empty()) {
+                    lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+                  } else {
+                    lv_label_set_text(labels[i], item.c_str());
+                    lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+                  }
+                }
+
+  - id: panel_ma_play
+    mode: restart
+    parameters:
+      media_name: string
+      media_type: string
+    then:
+      - homeassistant.action:
+          action: music_assistant.play_media
+          data:
+            entity_id: media_player.spider_one_audio_receiver_2
+            enqueue: replace
+          data_template:
+            media_id: "{{ requested_media_id }}"
+            media_type: "{{ requested_media_type }}"
+          variables:
+            requested_media_id: !lambda 'return media_name;'
+            requested_media_type: !lambda 'return media_type;'
+          on_success:
+            - logger.log:
+                level: INFO
+                format: "Music Assistant: wysĹ‚ano polecenie odtwarzania"
+          on_error:
+            - logger.log:
+                level: WARN
+                format: "Music Assistant: nie udaĹ‚o siÄ™ uruchomiÄ‡ pozycji"
+
+  - id: panel_audio_test
+    mode: single
+    then:
+      - lambda: |-
+          id(panel_signal_speaker).set_audio_stream_info(audio::AudioStreamInfo(16, 2, 48000));
+          id(panel_signal_speaker).start();
+          id(panel_speaker).start();
+          ESP_LOGI("panel_audio", "v1.7 tone: requested 48000Hz / stereo / 16bit");
+      - wait_until:
+          condition:
+            lambda: return id(panel_signal_speaker).is_running() && id(panel_speaker).is_running();
+          timeout: 3s
+      - if:
+          condition:
+            lambda: return id(panel_signal_speaker).is_running() && id(panel_speaker).is_running();
+          then:
+            - repeat:
+                count: 20
+                then:
+                  - lambda: |-
+                      // 10ms PCM stereo. Small fixed buffer avoids vector allocations.
+                      static uint8_t pcm[1920];
+                      for (int i = 0; i < 480; ++i) {
+                        const int16_t sample = (i % 60 < 30) ? 9000 : -9000;
+                        const uint16_t value = static_cast<uint16_t>(sample);
+                        const int offset = i * 4;
+                        pcm[offset] = pcm[offset + 2] = static_cast<uint8_t>(value & 0xFF);
+                        pcm[offset + 1] = pcm[offset + 3] = static_cast<uint8_t>(value >> 8);
+                      }
+                      const size_t written = id(panel_signal_speaker).play(pcm, sizeof(pcm));
+                      if (written != sizeof(pcm)) {
+                        ESP_LOGW("panel_audio", "v1.7 tone partial write: %u/1920", unsigned(written));
+                      }
+                  - delay: 10ms
+            - speaker.finish: panel_signal_speaker
+            - logger.log: "v1.7 tone: 200ms queued through mixer; source finishing"
+          else:
+            - speaker.stop: panel_signal_speaker
+            - logger.log:
+                level: WARN
+                format: "v1.7 tone: speaker start timeout"
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 12
+    glyphs: " ()-%/.:Â°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÄ„Ä†ÄĹĹĂ“ĹšĹąĹ»Ä…Ä‡Ä™Ĺ‚Ĺ„ĂłĹ›ĹşĹĽâ€˘â€“â€”"
+  - file: "gfonts://Roboto@500"
+    id: font_normal
+    size: 16
+    glyphs: " ()-%/.:Â°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÄ„Ä†ÄĹĹĂ“ĹšĹąĹ»Ä…Ä‡Ä™Ĺ‚Ĺ„ĂłĹ›ĹşĹĽâ€˘â€“â€”"
+  - file: "gfonts://Roboto@700"
+    id: font_values
+    size: 22
+    glyphs: " ()-%/.:Â°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÄ„Ä†ÄĹĹĂ“ĹšĹąĹ»Ä…Ä‡Ä™Ĺ‚Ĺ„ĂłĹ›ĹşĹĽâ€˘â€“â€”"
+  - file: "gfonts://Roboto@700"
+    id: font_media_title
+    size: 24
+    glyphs: ' !"#$%&''()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~Ä„Ä†ÄĹĹĂ“ĹšĹąĹ»Ä…Ä‡Ä™Ĺ‚Ĺ„ĂłĹ›ĹşĹĽĂ€ĂĂ‚ĂĂ„Ă…Ă†Ă‡ĂĂ‰ĂŠĂ‹ĂŚĂŤĂŽĂŹĂĂ‘Ă’Ă”Ă•Ă–ĂĂ™ĂšĂ›ĂśĂťĂžĂźĂ ĂˇĂ˘ĂŁĂ¤ĂĄĂ¦Ă§Ă¨Ă©ĂŞĂ«Ă¬Ă­Ă®ĂŻĂ°Ă±Ă˛Ă´ĂµĂ¶Ă¸ĂąĂşĂ»Ă˝ĂľĂżÄ€Ä‚ÄÄŚÄŽÄÄ’Ä–ÄšÄžÄ°Ĺ‡ĹĹŚĹ”ĹĹžĹ Ĺ˘Ĺ¤ĹŞĹ®Ĺ°Ĺ˝ÄÄÄ‰ÄŤÄŹÄ‘Ä“Ä—Ä›ÄźÄ±ĹĹ‘ĹŤĹ•Ĺ™ĹźĹˇĹĄĹ«ĹŻĹ±Ĺľâ€žâ€śâ€ťâ€šâ€â€™â€“â€”â€¦'
+  - file: "gfonts://Roboto@500"
+    id: font_media_artist
+    size: 18
+    glyphs: ' !"#$%&''()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~Ä„Ä†ÄĹĹĂ“ĹšĹąĹ»Ä…Ä‡Ä™Ĺ‚Ĺ„ĂłĹ›ĹşĹĽĂ€ĂĂ‚ĂĂ„Ă…Ă†Ă‡ĂĂ‰ĂŠĂ‹ĂŚĂŤĂŽĂŹĂĂ‘Ă’Ă”Ă•Ă–ĂĂ™ĂšĂ›ĂśĂťĂžĂźĂ ĂˇĂ˘ĂŁĂ¤ĂĄĂ¦Ă§Ă¨Ă©ĂŞĂ«Ă¬Ă­Ă®ĂŻĂ°Ă±Ă˛Ă´ĂµĂ¶Ă¸ĂąĂşĂ»Ă˝ĂľĂżÄ€Ä‚ÄÄŚÄŽÄÄ’Ä–ÄšÄžÄ°Ĺ‡ĹĹŚĹ”ĹĹžĹ Ĺ˘Ĺ¤ĹŞĹ®Ĺ°Ĺ˝ÄÄÄ‰ÄŤÄŹÄ‘Ä“Ä—Ä›ÄźÄ±ĹĹ‘ĹŤĹ•Ĺ™ĹźĹˇĹĄĹ«ĹŻĹ±Ĺľâ€žâ€śâ€ťâ€šâ€â€™â€“â€”â€¦'
+  - file: "gfonts://Roboto@500"
+    id: font_media_item
+    size: 20
+    glyphs: ' !"#$%&''()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~Ä„Ä†ÄĹĹĂ“ĹšĹąĹ»Ä…Ä‡Ä™Ĺ‚Ĺ„ĂłĹ›ĹşĹĽĂ€ĂĂ‚ĂĂ„Ă…Ă†Ă‡ĂĂ‰ĂŠĂ‹ĂŚĂŤĂŽĂŹĂĂ‘Ă’Ă”Ă•Ă–ĂĂ™ĂšĂ›ĂśĂťĂžĂźĂ ĂˇĂ˘ĂŁĂ¤ĂĄĂ¦Ă§Ă¨Ă©ĂŞĂ«Ă¬Ă­Ă®ĂŻĂ°Ă±Ă˛Ă´ĂµĂ¶Ă¸ĂąĂşĂ»Ă˝ĂľĂżÄ€Ä‚ÄÄŚÄŽÄÄ’Ä–ÄšÄžÄ°Ĺ‡ĹĹŚĹ”ĹĹžĹ Ĺ˘Ĺ¤ĹŞĹ®Ĺ°Ĺ˝ÄÄÄ‰ÄŤÄŹÄ‘Ä“Ä—Ä›ÄźÄ±ĹĹ‘ĹŤĹ•Ĺ™ĹźĹˇĹĄĹ«ĹŻĹ±Ĺľâ€žâ€śâ€ťâ€šâ€â€™â€“â€”â€¦'
+
+  - file: "gfonts://Roboto@700"
+    id: font_clock_weekday
+    size: 32
+    glyphs: " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÄ„Ä†ÄĹĹĂ“ĹšĹąĹ»Ä…Ä‡Ä™Ĺ‚Ĺ„ĂłĹ›ĹşĹĽ"
+  - file:
+      type: gfonts
+      family: "Roboto Condensed"
+      weight: 700
+    id: font_weather_temp
+    size: 60
+    glyphs: "0123456789.-Â°C"
+  - file:
+      type: gfonts
+      family: "Roboto Condensed"
+      weight: 700
+    id: font_clock
+    size: 164
+    glyphs: "0123456789:"
+  - file: "gfonts://Roboto@700"
+    id: font_date
+    size: 18
+    glyphs: " -0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÄ„Ä†ÄĹĹĂ“ĹšĹąĹ»Ä…Ä‡Ä™Ĺ‚Ĺ„ĂłĹ›ĹşĹĽ"
+  - file:
+      type: web
+      url: https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/57b567a/fonts/materialdesignicons-webfont.ttf
+    id: font_icons
+    size: 30
+    bpp: 4
+    glyphs: "\U000F0020\U000F009A\U000F036C\U000F040E\U000F04AD\U000F04AE\U000F04DB\U000F0590\U000F0591\U000F0594\U000F0595\U000F0596\U000F0597\U000F0598\U000F0599\U000F059D\U000F05A9\U000F07D0"
+  - file:
+      type: web
+      url: https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/57b567a/fonts/materialdesignicons-webfont.ttf
+    id: font_weather_icon
+    size: 84
+    bpp: 4
+    glyphs: "\U000F0590\U000F0591\U000F0594\U000F0595\U000F0596\U000F0597\U000F0598\U000F0599\U000F059D"
+  - file:
+      type: web
+      url: https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/57b567a/fonts/materialdesignicons-webfont.ttf
+    id: font_footer_icons
+    size: 24
+    bpp: 4
+    glyphs: "\U000F0020\U000F0079\U000F009A\U000F036C\U000F05A9\U000F057E\U000F07D0"
+display:
+  - platform: mipi_rgb
+    model: RPI
+    id: lcd_display
+    update_interval: never
+    auto_clear_enabled: false
+    color_order: RGB
+    pixel_mode: 16bit
+    pclk_frequency: 16MHz
+    pclk_inverted: true
+    dimensions:
+      width: 800
+      height: 480
+    de_pin: GPIO5
+    hsync_pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    vsync_pin: GPIO3
+    pclk_pin: GPIO7
+    hsync_pulse_width: 8
+    hsync_back_porch: 8
+    hsync_front_porch: 4
+    vsync_pulse_width: 8
+    vsync_back_porch: 8
+    vsync_front_porch: 4
+    data_pins:
+      red:
+        - GPIO1   # R3
+        - GPIO2   # R4
+        - GPIO42  # R5
+        - GPIO41  # R6
+        - GPIO40  # R7
+      green:
+        - GPIO39  # G2
+        - number: GPIO0  # G3
+          ignore_strapping_warning: true
+        - GPIO45  # G4
+        - GPIO9   # G5, pinout 7C-BOX
+        - GPIO8   # G6, pinout 7C-BOX
+        - GPIO21  # G7
+      blue:
+        - GPIO14  # B3
+        - GPIO38  # B4
+        - GPIO18  # B5
+        - GPIO17  # B6
+        - GPIO10  # B7
+
+touchscreen:
+  - platform: gt911
+    id: panel_touch
+    i2c_id: bus_internal
+    interrupt_pin: GPIO4
+
+lvgl:
+  buffer_size: 100%
+  displays:
+    - lcd_display
+  touchscreens:
+    - touchscreen_id: panel_touch
+  # Po 60 s bez dotyku wrĂłÄ‡ do DOM, jeĹ›li aktywna jest karta AUDIO lub oĹ›wietlenia.
+  on_idle:
+    - timeout: 60s
+      then:
+        - if:
+            condition:
+              lambda: return id(panel_active_tab_index) >= 1 && id(panel_active_tab_index) <= 3;
+            then:
+              - logger.log: "Panel: 60s idle, returning to DOM"
+              - lvgl.tabview.select:
+                  id: panel_tabs
+                  index: 0
+  theme:
+    dark_mode: true
+    button:
+      bg_color: 0x29292E
+      text_color: 0xFFFFFF
+      border_color: 0x505056
+      border_width: 1
+      radius: 12
+      pressed:
+        bg_color: 0x413B2E
+        border_color: 0xFFC107
+  widgets:
+    - tabview:
+        id: panel_tabs
+        scrollbar_mode: "OFF"
+        x: 0
+        y: 0
+        width: 800
+        height: 422
+        position: top
+        size: 52
+        tab_style:
+          bg_color: 0x17171A
+          border_width: 0
+          items:
+            bg_color: 0x202024
+            text_color: 0xE8E8E8
+            text_font: font_normal
+            border_width: 0
+            checked:
+              bg_color: 0x2A2D32
+              text_color: 0xFFFFFF
+              border_color: 0x3D444E
+              border_width: 1
+        content_style:
+          bg_color: 0x111113
+          border_width: 0
+        on_value:
+          - lambda: |-
+              if (tab == id(tab_dom)) { id(panel_active_tab_index) = 0; lv_obj_set_x(id(tab_indicator), 27); }
+              else if (tab == id(tab_spider)) { id(panel_active_tab_index) = 1; lv_obj_set_x(id(tab_indicator), 227); }
+              else if (tab == id(tab_bedroom_lights)) { id(panel_active_tab_index) = 2; lv_obj_set_x(id(tab_indicator), 427); }
+              else if (tab == id(tab_home_lights)) { id(panel_active_tab_index) = 3; lv_obj_set_x(id(tab_indicator), 627); }
+              ESP_LOGI("panel_ui", "Aktywna karta zmieniona: %d", id(panel_active_tab_index));
+          - script.execute: panel_refresh_active_tab_ui
+        tabs:
+          - name: "DOM"
+            id: tab_dom
+            scrollbar_mode: "OFF"
+            scrollable: false
+            widgets:
+              # Pogoda po lewej: opis wspĂłlny nad ikonÄ… i temperaturÄ….
+              - obj:
+                  x: 4
+                  y: 4
+                  width: 252
+                  height: 342
+                  bg_color: 0x18191D
+                  border_color: 0x2C2C2E
+                  border_width: 1
+                  radius: 14
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_weather_condition
+                        align: TOP_MID
+                        y: 12
+                        width: 236
+                        text: "ĹADOWANIE POGODY"
+                        text_font: font_normal
+                        text_color: 0x90A4AE
+                        text_align: CENTER
+                    - label:
+                        id: lbl_weather_icon
+                        align: TOP_MID
+                        y: 42
+                        text: "\U000F0595"
+                        text_font: font_weather_icon
+                        text_color: 0x00B8E6
+                    - label:
+                        id: lbl_weather_temp
+                        align: TOP_MID
+                        y: 122
+                        width: 240
+                        text: "--.-Â°C"
+                        text_font: font_weather_temp
+                        text_color: 0xFFFFFF
+                        text_align: CENTER
+                    - obj:
+                        x: 12
+                        y: 198
+                        width: 228
+                        height: 2
+                        bg_color: 0x2D2D2D
+                        border_width: 0
+                    - label:
+                        x: 12
+                        y: 208
+                        width: 108
+                        text: "WILGOTNOĹšÄ†"
+                        text_font: font_small
+                        text_color: 0x9E9E9E
+                    - label:
+                        id: lbl_weather_humidity
+                        x: 12
+                        y: 229
+                        width: 108
+                        text: "--%"
+                        text_font: font_values
+                        text_color: 0xFFFFFF
+                    - label:
+                        x: 132
+                        y: 208
+                        width: 108
+                        text: "TEMP. ODCZUW."
+                        text_font: font_small
+                        text_color: 0x9E9E9E
+                    - label:
+                        id: lbl_weather_feels_like
+                        x: 132
+                        y: 229
+                        width: 108
+                        text: "--.-Â°C"
+                        text_font: font_values
+                        text_color: 0xFFFFFF
+                    - label:
+                        x: 12
+                        y: 265
+                        width: 108
+                        text: "CIĹšNIENIE"
+                        text_font: font_small
+                        text_color: 0x9E9E9E
+                    - label:
+                        id: lbl_weather_pressure
+                        x: 12
+                        y: 286
+                        width: 108
+                        text: "---- hPa"
+                        text_font: font_values
+                        text_color: 0xFFFFFF
+                    - label:
+                        x: 132
+                        y: 265
+                        width: 108
+                        text: "WIATR"
+                        text_font: font_small
+                        text_color: 0x9E9E9E
+                    - label:
+                        id: lbl_weather_wind
+                        x: 132
+                        y: 286
+                        width: 108
+                        text: "--.- km/h"
+                        text_font: font_values
+                        text_color: 0xFFFFFF
+
+              # Zegar klapkowy zajmuje prawÄ… czÄ™Ĺ›Ä‡ pulpitu, data pozostaje pod nim.
+              - obj:
+                  x: 260
+                  y: 4
+                  width: 524
+                  height: 342
+                  bg_color: 0x18191D
+                  border_color: 0x2C2C2E
+                  border_width: 1
+                  radius: 14
+                  pad_all: 0
+                  widgets:
+                    - obj:
+                        x: 12
+                        y: 16
+                        width: 110
+                        height: 202
+                        bg_color: 0x1E1E1E
+                        border_color: 0x333333
+                        border_width: 1
+                        radius: 8
+                        pad_all: 0
+                        widgets:
+                          - obj:
+                              x: 0
+                              y: 0
+                              width: 108
+                              height: 98
+                              bg_color: 0x292929
+                              border_width: 0
+                              radius: 8
+                          - obj:
+                              x: 0
+                              y: 104
+                              width: 108
+                              height: 96
+                              bg_color: 0x191919
+                              border_width: 0
+                              radius: 8
+                          - label:
+                              id: lbl_clock_hour_tens
+                              align: CENTER
+                              y: -2
+                              text: "-"
+                              text_font: font_clock
+                              text_color: 0xFF9F1C
+                              text_align: CENTER
+                          - obj:
+                              x: 0
+                              y: 100
+                              width: 108
+                              height: 2
+                              bg_color: 0x0A0A0A
+                              border_width: 0
+                    - obj:
+                        x: 128
+                        y: 16
+                        width: 110
+                        height: 202
+                        bg_color: 0x1E1E1E
+                        border_color: 0x333333
+                        border_width: 1
+                        radius: 8
+                        pad_all: 0
+                        widgets:
+                          - obj:
+                              x: 0
+                              y: 0
+                              width: 108
+                              height: 98
+                              bg_color: 0x292929
+                              border_width: 0
+                              radius: 8
+                          - obj:
+                              x: 0
+                              y: 104
+                              width: 108
+                              height: 96
+                              bg_color: 0x191919
+                              border_width: 0
+                              radius: 8
+                          - label:
+                              id: lbl_clock_hour_ones
+                              align: CENTER
+                              y: -2
+                              text: "-"
+                              text_font: font_clock
+                              text_color: 0xFF9F1C
+                              text_align: CENTER
+                          - obj:
+                              x: 0
+                              y: 100
+                              width: 108
+                              height: 2
+                              bg_color: 0x0A0A0A
+                              border_width: 0
+                    - label:
+                        id: lbl_clock_colon
+                        x: 246
+                        y: 22
+                        width: 32
+                        height: 180
+                        text: ":"
+                        text_font: font_clock
+                        text_color: 0xFF9F1C
+                        text_align: CENTER
+                        bg_color: 0x18191D
+                        bg_opa: TRANSP
+                        border_width: 0
+                        outline_width: 0
+                        shadow_width: 0
+                        pad_all: 0
+                    - obj:
+                        x: 286
+                        y: 16
+                        width: 110
+                        height: 202
+                        bg_color: 0x1E1E1E
+                        border_color: 0x333333
+                        border_width: 1
+                        radius: 8
+                        pad_all: 0
+                        widgets:
+                          - obj:
+                              x: 0
+                              y: 0
+                              width: 108
+                              height: 98
+                              bg_color: 0x292929
+                              border_width: 0
+                              radius: 8
+                          - obj:
+                              x: 0
+                              y: 104
+                              width: 108
+                              height: 96
+                              bg_color: 0x191919
+                              border_width: 0
+                              radius: 8
+                          - label:
+                              id: lbl_clock_minute_tens
+                              align: CENTER
+                              y: -2
+                              text: "-"
+                              text_font: font_clock
+                              text_color: 0xFF9F1C
+                              text_align: CENTER
+                          - obj:
+                              x: 0
+                              y: 100
+                              width: 108
+                              height: 2
+                              bg_color: 0x0A0A0A
+                              border_width: 0
+                    - obj:
+                        x: 402
+                        y: 16
+                        width: 110
+                        height: 202
+                        bg_color: 0x1E1E1E
+                        border_color: 0x333333
+                        border_width: 1
+                        radius: 8
+                        pad_all: 0
+                        widgets:
+                          - obj:
+                              x: 0
+                              y: 0
+                              width: 108
+                              height: 98
+                              bg_color: 0x292929
+                              border_width: 0
+                              radius: 8
+                          - obj:
+                              x: 0
+                              y: 104
+                              width: 108
+                              height: 96
+                              bg_color: 0x191919
+                              border_width: 0
+                              radius: 8
+                          - label:
+                              id: lbl_clock_minute_ones
+                              align: CENTER
+                              y: -2
+                              text: "-"
+                              text_font: font_clock
+                              text_color: 0xFF9F1C
+                              text_align: CENTER
+                          - obj:
+                              x: 0
+                              y: 100
+                              width: 108
+                              height: 2
+                              bg_color: 0x0A0A0A
+                              border_width: 0
+                    - obj:
+                        x: 12
+                        y: 232
+                        width: 500
+                        height: 88
+                        bg_color: 0x141414
+                        border_color: 0x2F2F32
+                        border_width: 1
+                        radius: 10
+                        pad_all: 0
+                        widgets:
+                          - label:
+                              id: lbl_clock_weekday
+                              align: TOP_MID
+                              y: 7
+                              text: "--"
+                              text_font: font_clock_weekday
+                              text_color: 0xFFFFFF
+                          - label:
+                              id: lbl_clock_date
+                              align: TOP_MID
+                              y: 48
+                              text: "--"
+                              text_font: font_date
+                              text_color: 0x90A4AE
+          - name: "AUDIO (SPIDER)"
+            id: tab_spider
+            scrollbar_mode: "OFF"
+            scrollable: false
+            widgets:
+              - label:
+                  id: lbl_player_status
+                  align: TOP_MID
+                  y: 6
+                  text: "Spider: gotowy"
+                  text_font: font_normal
+                  text_color: 0xFFC107
+              - obj:
+                  x: 38
+                  y: 34
+                  width: 708
+                  height: 100
+                  bg_color: 0x18191D
+                  border_color: 0x30343B
+                  border_width: 1
+                  radius: 14
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_spider_track
+                        align: TOP_MID
+                        y: 17
+                        width: 680
+                        text: "Brak aktywnego odtwarzania"
+                        text_font: font_media_title
+                        text_color: 0xFFFFFF
+                        text_align: CENTER
+                    - label:
+                        id: lbl_spider_artist
+                        align: TOP_MID
+                        y: 57
+                        width: 680
+                        text: "Wybierz Radio lub Spotify"
+                        text_font: font_media_artist
+                        text_color: 0x90A4AE
+                        text_align: CENTER
+              - button:
+                  align: CENTER
+                  x: -205
+                  y: -10
+                  width: 150
+                  height: 68
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 3
+                        text: "\U000F04AE"
+                        text_font: font_icons
+                        text_color: 0xFFFFFF
+                    - label:
+                        align: BOTTOM_MID
+                        y: -4
+                        text: "POPRZEDNI"
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                  on_click:
+                    - homeassistant.action:
+                        action: media_player.media_previous_track
+                        data:
+                          entity_id: media_player.spider_one_audio_receiver_2
+              - button:
+                  align: CENTER
+                  x: 0
+                  y: -10
+                  width: 176
+                  height: 68
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 3
+                        text: "\U000F040E"
+                        text_font: font_icons
+                        text_color: 0xFFC107
+                    - label:
+                        align: BOTTOM_MID
+                        y: -4
+                        text: "PLAY / PAUZA"
+                        text_font: font_small
+                        text_color: 0xFFC107
+                  on_click:
+                    - homeassistant.action:
+                        action: media_player.media_play_pause
+                        data:
+                          entity_id: media_player.spider_one_audio_receiver_2
+              - button:
+                  align: CENTER
+                  x: 205
+                  y: -10
+                  width: 150
+                  height: 68
+                  widgets:
+                    - label:
+                        align: TOP_MID
+                        y: 3
+                        text: "\U000F04AD"
+                        text_font: font_icons
+                        text_color: 0xFFFFFF
+                    - label:
+                        align: BOTTOM_MID
+                        y: -4
+                        text: "NASTÄPNY"
+                        text_font: font_small
+                        text_color: 0xFFFFFF
+                  on_click:
+                    - homeassistant.action:
+                        action: media_player.media_next_track
+                        data:
+                          entity_id: media_player.spider_one_audio_receiver_2
+              - label:
+                  align: TOP_MID
+                  y: 190
+                  text: "WYBIERZ ĹąRĂ“DĹO"
+                  text_font: font_small
+                  text_color: 0xAAB2BB
+              - button:
+                  x: 126
+                  y: 214
+                  width: 250
+                  height: 104
+                  bg_color: 0x202A30
+                  border_color: 0x00B8E6
+                  border_width: 2
+                  radius: 14
+                  widgets:
+                    - label:
+                        align: CENTER
+                        y: -12
+                        text: "RADIO"
+                        text_font: montserrat_24
+                        text_color: 0x00B8E6
+                    - label:
+                        align: CENTER
+                        y: 24
+                        text: "STACJE RADIOWE"
+                        text_font: font_small
+                        text_color: 0xE0E0E0
+                  on_click:
+                    - script.execute:
+                        id: panel_open_media_list
+                        is_radio: true
+              - button:
+                  x: 424
+                  y: 214
+                  width: 250
+                  height: 104
+                  bg_color: 0x28251D
+                  border_color: 0xFFC107
+                  border_width: 2
+                  radius: 14
+                  widgets:
+                    - label:
+                        align: CENTER
+                        y: -12
+                        text: "SPOTIFY"
+                        text_font: montserrat_24
+                        text_color: 0xFFC107
+                    - label:
+                        align: CENTER
+                        y: 24
+                        text: "PLAYLISTY MUSIC ASSISTANT"
+                        text_font: font_small
+                        text_color: 0xE0E0E0
+                  on_click:
+                    - script.execute:
+                        id: panel_open_media_list
+                        is_radio: false
+
+              # Jeden ekran wyboru jest wspĂłĹ‚dzielony przez radio i playlisty.
+              - obj:
+                  id: spider_selection_overlay
+                  x: 0
+                  y: 0
+                  width: 800
+                  height: 370
+                  hidden: true
+                  bg_color: 0x111113
+                  bg_opa: 100%
+                  border_width: 0
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_spider_selection_title
+                        x: 28
+                        y: 12
+                        text: "RADIO  /  WYBIERZ STACJÄ"
+                        text_font: font_media_title
+                        text_color: 0xFFFFFF
+                    - button:
+                        x: 690
+                        y: 8
+                        width: 88
+                        height: 42
+                        bg_color: 0x28251D
+                        border_color: 0xFFC107
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "ZAMKNIJ"
+                              text_font: font_small
+                              text_color: 0xFFFFFF
+                        on_click:
+                          - lvgl.widget.hide: spider_selection_overlay
+                    - obj:
+                        x: 26
+                        y: 62
+                        width: 748
+                        height: 286
+                        bg_color: 0x151517
+                        border_color: 0x2A2A2E
+                        border_width: 1
+                        radius: 12
+                        scroll_dir: VER
+                        scrollbar_mode: "AUTO"
+                        pad_all: 12
+                        layout:
+                          type: flex
+                          flex_flow: column
+                          flex_align_main: start
+                          flex_align_cross: center
+                          pad_row: 6
+                        widgets:
+                          - button:
+                              id: btn_spider_choice_01
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_01
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_01));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_02
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_02
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_02));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_03
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_03
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_03));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_04
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_04
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_04));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_05
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_05
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_05));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_06
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_06
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_06));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_07
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_07
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_07));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_08
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_08
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_08));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_09
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_09
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_09));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_10
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_10
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_10));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_11
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_11
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_11));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+                          - button:
+                              id: btn_spider_choice_12
+                              width: 710
+                              height: 54
+                              hidden: true
+                              bg_color: 0x202A30
+                              border_color: 0x3A3A3F
+                              border_width: 1
+                              radius: 10
+                              widgets:
+                                - label:
+                                    id: lbl_spider_choice_12
+                                    align: CENTER
+                                    width: 690
+                                    long_mode: DOT
+                                    text: "â€”"
+                                    text_font: font_media_item
+                                    text_color: 0xFFFFFF
+                              on_click:
+                                - script.execute:
+                                    id: panel_ma_play
+                                    media_name: !lambda |-
+                                      const char *value = lv_label_get_text(id(lbl_spider_choice_12));
+                                      return std::string(value == nullptr ? "" : value);
+                                    media_type: !lambda |-
+                                      return id(spider_selection_is_radio)
+                                        ? std::string("radio") : std::string("playlist");
+                                - lvgl.widget.hide: spider_selection_overlay
+          - name: "OĹšW. SYPIALNIA"
+            id: tab_bedroom_lights
+            scrollbar_mode: "OFF"
+            scrollable: false
+            widgets:
+              - obj:
+                  x: 4
+                  y: 8
+                  width: 420
+                  height: 332
+                  scrollbar_mode: "OFF"
+                  scrollable: false
+                  bg_color: 0x18191D
+                  border_color: 0x30343B
+                  border_width: 1
+                  radius: 14
+                  widgets:
+                    - label:
+                        x: 16
+                        y: 16
+                        text: "OBWODY ĹšWIATĹA W SYPIALNI"
+                        text_font: font_small
+                        text_color: 0xAAB2BB
+                    - button:
+                        id: btn_bed_kula
+                        x: 8
+                        y: 44
+                        width: 380
+                        height: 68
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 350
+                              text_align: CENTER
+                              text: "KULA"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              id: lbl_state_kula
+                              align: CENTER
+                              y: 13
+                              width: 350
+                              text_align: CENTER
+                              text: "ĹÄ„CZENIE Z HA"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: light.bedroom_uplights_l2
+                    - button:
+                        id: btn_bed_led
+                        x: 8
+                        y: 120
+                        width: 380
+                        height: 68
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 350
+                              text_align: CENTER
+                              text: "TAĹšMA LED"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              id: lbl_state_led
+                              align: CENTER
+                              y: 13
+                              width: 350
+                              text_align: CENTER
+                              text: "ĹÄ„CZENIE Z HA"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: light.bedroom_uplights_l1
+                    - button:
+                        id: btn_bed_night_lamp
+                        x: 8
+                        y: 196
+                        width: 380
+                        height: 68
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 350
+                              text_align: CENTER
+                              text: "LAMPKA NOCNA"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              id: lbl_state_night_lamp
+                              align: CENTER
+                              y: 13
+                              width: 350
+                              text_align: CENTER
+                              text: "ĹÄ„CZENIE Z HA"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: light.bedlamp_1
+              - obj:
+                  x: 438
+                  y: 8
+                  width: 320
+                  height: 332
+                  scrollbar_mode: "OFF"
+                  scrollable: false
+                  bg_color: 0x18191D
+                  border_color: 0x30343B
+                  border_width: 1
+                  radius: 14
+                  widgets:
+                    - label:
+                        x: 16
+                        y: 16
+                        text: "SCENY SYPIALNI"
+                        text_font: font_small
+                        text_color: 0xAAB2BB
+                    - button:
+                        id: btn_scene_noc
+                        x: 8
+                        y: 42
+                        width: 268
+                        height: 54
+                        bg_color: 0x20272D
+                        border_color: 0x48545F
+                        border_width: 1
+                        radius: 10
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 244
+                              text_align: CENTER
+                              text: "NOC"
+                              text_font: font_normal
+                              text_color: 0xFFC107
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 244
+                              text_align: CENTER
+                              text: "LAMPKA NOCNA"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: scene.turn_on
+                              data:
+                                entity_id: scene.sypialnia_noc
+                    - button:
+                        id: btn_scene_czytanie
+                        x: 8
+                        y: 102
+                        width: 268
+                        height: 54
+                        bg_color: 0x20272D
+                        border_color: 0x48545F
+                        border_width: 1
+                        radius: 10
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 244
+                              text_align: CENTER
+                              text: "CZYTANIE"
+                              text_font: font_normal
+                              text_color: 0xFFC107
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 244
+                              text_align: CENTER
+                              text: "WSZYSTKIE ĹšWIATĹA"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: scene.turn_on
+                              data:
+                                entity_id: scene.sypialnia_czytanie
+                    - button:
+                        id: btn_scene_relaks
+                        x: 8
+                        y: 162
+                        width: 268
+                        height: 54
+                        bg_color: 0x20272D
+                        border_color: 0x48545F
+                        border_width: 1
+                        radius: 10
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 244
+                              text_align: CENTER
+                              text: "RELAKS"
+                              text_font: font_normal
+                              text_color: 0xFFC107
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 244
+                              text_align: CENTER
+                              text: "LED I LAMPKA NOCNA"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: scene.turn_on
+                              data:
+                                entity_id: scene.sypialnia_relaks
+                    - button:
+                        x: 8
+                        y: 224
+                        width: 268
+                        height: 58
+                        bg_color: 0x302122
+                        border_color: 0xB65B56
+                        border_width: 1
+                        radius: 10
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 248
+                              text_align: CENTER
+                              text: "WYĹÄ„CZ SYPIALNIÄ"
+                              text_font: font_normal
+                              text_color: 0xFFCDD2
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 248
+                              text_align: CENTER
+                              text: "WyĹ‚Ä…cza wszystkie 3 obwody"
+                              text_font: font_small
+                              text_color: 0xE0B8B8
+                        on_click:
+                          - homeassistant.action:
+                              action: light.turn_off
+                              data:
+                                entity_id: "light.bedroom_uplights_l2, light.bedroom_uplights_l1, light.bedlamp_1"
+          - name: "OĹšW. W DOMU"
+            id: tab_home_lights
+            scrollbar_mode: "OFF"
+            scrollable: false
+            widgets:
+              - obj:
+                  x: 0
+                  y: 8
+                  width: 770
+                  height: 320
+                  scrollbar_mode: "OFF"
+                  scrollable: false
+                  bg_color: 0x18191D
+                  border_color: 0x30343B
+                  border_width: 1
+                  radius: 14
+                  widgets:
+                    - label:
+                        x: 18
+                        y: 18
+                        text: "STAN ĹšWIATEĹ W DOMU"
+                        text_font: font_normal
+                        text_color: 0xFF8A00
+                    - button:
+                        x: 515
+                        y: 8
+                        width: 190
+                        height: 38
+                        bg_color: 0x2B1616
+                        border_color: 0xD32F2F
+                        border_width: 1
+                        radius: 8
+                        widgets:
+                          - label:
+                              align: CENTER
+                              text: "WYĹÄ„CZ CAĹY DOM"
+                              text_font: font_normal
+                              text_color: 0xFFCDD2
+                        on_click:
+                          - homeassistant.action:
+                              action: light.turn_off
+                              data:
+                                entity_id: all
+                    - button:
+                        id: btn_room_salon
+                        x: 35
+                        y: 62
+                        width: 200
+                        height: 98
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 180
+                              text_align: CENTER
+                              text: "SALON"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 180
+                              text_align: CENTER
+                              text: "5 obwodĂłw"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: light.swiatlo_w_salonie
+                    - button:
+                        id: btn_room_studio
+                        x: 270
+                        y: 62
+                        width: 200
+                        height: 98
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 180
+                              text_align: CENTER
+                              text: "STUDIO"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 180
+                              text_align: CENTER
+                              text: "3 obwody"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: light.swiatlo_w_studio
+                    - button:
+                        id: btn_room_bedroom
+                        x: 505
+                        y: 62
+                        width: 200
+                        height: 98
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 180
+                              text_align: CENTER
+                              text: "SYPIALNIA"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 180
+                              text_align: CENTER
+                              text: "3 obwody"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: light.swiatlo_w_sypialni
+                    - button:
+                        id: btn_room_hall
+                        x: 35
+                        y: 174
+                        width: 200
+                        height: 98
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 180
+                              text_align: CENTER
+                              text: "PRZEDPOKĂ“J"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 180
+                              text_align: CENTER
+                              text: "3 obwody"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - if:
+                              condition:
+                                lambda: |-
+                                  return id(panel_light_home_hall_1).has_state() &&
+                                         id(panel_light_home_hall_2).has_state() &&
+                                         id(panel_light_home_hall_3).has_state() &&
+                                         (id(panel_light_home_hall_1).state == "on" ||
+                                          id(panel_light_home_hall_2).state == "on" ||
+                                          id(panel_light_home_hall_3).state == "on");
+                              then:
+                                - homeassistant.action:
+                                    action: light.turn_off
+                                    data:
+                                      entity_id: "light.hall_l1, light.hall_l2, light.hall_3"
+                              else:
+                                - if:
+                                    condition:
+                                      lambda: |-
+                                        return id(panel_light_home_hall_1).has_state() &&
+                                               id(panel_light_home_hall_2).has_state() &&
+                                               id(panel_light_home_hall_3).has_state();
+                                    then:
+                                      - homeassistant.action:
+                                          action: light.turn_on
+                                          data:
+                                            entity_id: "light.hall_l1, light.hall_l2, light.hall_3"
+                    - button:
+                        id: btn_room_bathroom
+                        x: 270
+                        y: 174
+                        width: 200
+                        height: 98
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 180
+                              text_align: CENTER
+                              text: "ĹAZIENKA"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 180
+                              text_align: CENTER
+                              text: "1 obwĂłd"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: light.bathroom
+                    - button:
+                        id: btn_room_wc
+                        x: 505
+                        y: 174
+                        width: 200
+                        height: 98
+                        bg_color: 0x292D32
+                        border_color: 0x59636D
+                        border_width: 1
+                        radius: 12
+                        scrollable: false
+                        widgets:
+                          - label:
+                              align: CENTER
+                              y: -8
+                              width: 180
+                              text_align: CENTER
+                              text: "UBIKACJA"
+                              text_font: font_normal
+                              text_color: 0xFFFFFF
+                          - label:
+                              align: CENTER
+                              y: 13
+                              width: 180
+                              text_align: CENTER
+                              text: "1 obwĂłd"
+                              text_font: font_small
+                              text_color: 0xAAB2BB
+                        on_click:
+                          - homeassistant.action:
+                              action: light.toggle
+                              data:
+                                entity_id: light.wc
+  top_layer:
+    widgets:
+      - obj:
+          id: tab_indicator
+          x: 27
+          y: 36
+          width: 146
+          height: 4
+          bg_color: 0x00E5FF
+          border_width: 0
+          radius: 2
+      - obj:
+          id: persistent_footer
+          align: BOTTOM_MID
+          width: 800
+          height: 58
+          bg_color: 0x17171A
+          border_color: 0x414146
+          border_width: 1
+          radius: 0
+          pad_all: 0
+          widgets:
+            - label:
+                align: LEFT_MID
+                x: 14
+                text: "\U000F05A9"
+                text_font: font_footer_icons
+                text_color: 0x00E5FF
+            - label:
+                id: lbl_footer_wifi
+                align: LEFT_MID
+                x: 42
+                text: "-- dBm"
+                text_font: font_small
+                text_color: 0xE0E0E0
+            - label:
+                id: lbl_footer_ha_dot
+                align: LEFT_MID
+                x: 108
+                text: "\U000F07D0"
+                text_font: font_footer_icons
+                text_color: 0x00E5FF
+            - label:
+                id: lbl_footer_battery_icon
+                align: RIGHT_MID
+                x: -62
+                text: "\U000F0079"
+                text_font: font_footer_icons
+                text_color: 0xFFC107
+            - label:
+                id: lbl_footer_battery_value
+                align: RIGHT_MID
+                x: -8
+                text: "--%"
+                text_font: font_small
+                text_color: 0xFFFFFF
+            - obj:
+                id: status_home_chip
+                x: 197
+                y: 13
+                width: 68
+                height: 32
+                bg_color: 0x66717D
+                border_width: 0
+                radius: 10
+                pad_all: 0
+                widgets:
+                  - label:
+                      id: lbl_status_home
+                      align: CENTER
+                      width: 64
+                      text_align: CENTER
+                      text: "DOM"
+                      text_font: font_small
+                      text_color: 0xFFFFFF
+            - obj:
+                id: status_infra_chip
+                x: 444
+                y: 13
+                width: 82
+                height: 32
+                bg_color: 0x66717D
+                border_width: 0
+                radius: 10
+                pad_all: 0
+                widgets:
+                  - label:
+                      id: lbl_status_infra
+                      align: CENTER
+                      width: 78
+                      text_align: CENTER
+                      text: "INFRA"
+                      text_font: font_small
+                      text_color: 0xFFFFFF
+            - obj:
+                id: status_doors_chip
+                x: 363
+                y: 13
+                width: 76
+                height: 32
+                bg_color: 0x66717D
+                border_width: 0
+                radius: 10
+                pad_all: 0
+                widgets:
+                  - label:
+                      id: lbl_status_doors
+                      align: CENTER
+                      width: 72
+                      text_align: CENTER
+                      text: "DRZWI"
+                      text_font: font_small
+                      text_color: 0xFFFFFF
+            - button:
+                id: status_va_chip
+                x: 270
+                y: 13
+                width: 88
+                height: 32
+                bg_color: 0x20262D
+                border_width: 0
+                radius: 10
+                pad_all: 0
+                widgets:
+                  - label:
+                      id: lbl_status_va
+                      align: CENTER
+                      width: 84
+                      text_align: CENTER
+                      text: "CZUWA"
+                      text_font: font_small
+                      text_color: 0xFFFFFF
+                on_click:
+                  - switch.toggle: panel_ww_enabled
+            - label:
+                id: lbl_footer_timer
+                align: LEFT_MID
+                x: 531
+                text: ""
+                text_font: font_footer_icons
+                text_color: 0xFFA726
+            - label:
+                id: lbl_footer_alarm
+                align: LEFT_MID
+                x: 555
+                text: ""
+                text_font: font_footer_icons
+                text_color: 0x00E5FF
+
+            - button:
+                id: btn_footer_mic
+                align: LEFT_MID
+                x: 590
+                width: 38
+                height: 36
+                bg_color: 0x141414
+                border_width: 0
+                radius: 8
+                widgets:
+                  - label:
+                      id: lbl_footer_mic
+                      align: CENTER
+                      text: "\U000F036C"
+                      text_font: font_footer_icons
+                      text_color: 0x00E676
+                on_click:
+                  - if:
+                      condition:
+                        voice_assistant.is_running:
+                          id: panel_assist
+                      then:
+                        - voice_assistant.stop:
+                            id: panel_assist
+                      else:
+                        - voice_assistant.start:
+                            id: panel_assist
+            - label:
+                id: lbl_footer_speaker
+                align: LEFT_MID
+                x: 638
+                text: "\U000F057E"
+                text_font: font_footer_icons
+                text_color: 0xE0E0E0
+time:
+  - platform: homeassistant
+    id: panel_ha_time
+
+interval:
+  - interval: 1s
+    then:
+      - script.execute:
+          id: panel_refresh_clock
+          force_refresh: false
+  - interval: 5s
+    then:
+      - script.execute: panel_refresh_footer_ui
+      - script.execute: panel_refresh_dom_ui
+      - script.execute: panel_refresh_bedroom_ui
+      - script.execute: panel_refresh_home_ui
+
+binary_sensor:
+  - platform: status
+    name: "${friendly_name} dostÄ™pnoĹ›Ä‡ ESPHome"
+    entity_category: diagnostic
+  - platform: homeassistant
+    id: panel_entry_open
+    entity_id: binary_sensor.door_contactron_contact
+  - platform: homeassistant
+    id: panel_balcony_open
+    entity_id: binary_sensor.balcony_contactron_contact
+
+sensor:
+  # Read standard BQ27220 registers only. No control/reset/unseal/configuration writes.
+  # 10 s is a diagnostic sampling period; LVGL updates only when the rounded SOC changes.
+  - platform: template
+    id: panel_battery_level
+    name: "${friendly_name} bateria"
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      // SOC, voltage, current, average current, remaining/FCC/design capacity,
+      // BatteryStatus and OperationStatus. All words are little endian.
+      const uint8_t registers[] = {0x2C, 0x08, 0x0C, 0x14, 0x10, 0x12, 0x3C, 0x0A, 0x3A};
+      uint16_t values[9] = {};
+      for (size_t i = 0; i < 9; i++) {
+        uint8_t bytes[2] = {};
+        // This single-byte write selects the read address, never changes register data.
+        const auto result = id(bus_internal).write_readv(0x55, &registers[i], 1, bytes, sizeof(bytes));
+        if (result != i2c::ERROR_OK) {
+          ESP_LOGW("panel_battery", "v1.15 BQ27220 read failed reg=0x%02X error=%d", registers[i], result);
+          id(panel_battery_voltage).publish_state(NAN);
+          id(panel_battery_current).publish_state(NAN);
+          id(panel_battery_average_current).publish_state(NAN);
+          id(panel_battery_remaining).publish_state(NAN);
+          id(panel_battery_full).publish_state(NAN);
+          id(panel_battery_design).publish_state(NAN);
+          id(panel_battery_status).publish_state(NAN);
+          id(panel_battery_operation_status).publish_state(NAN);
+          return NAN;
+        }
+        values[i] = uint16_t(bytes[0]) | (uint16_t(bytes[1]) << 8);
+      }
+      const int current_ma = values[2] >= 0x8000 ? int(values[2]) - 65536 : int(values[2]);
+      const int average_ma = values[3] >= 0x8000 ? int(values[3]) - 65536 : int(values[3]);
+      const bool present = (values[7] & 0x0008) != 0;
+      const bool initialized = (values[8] & 0x0020) != 0;
+      // Preserve raw diagnostic readings, even if the voltage estimate is not yet usable.
+      id(panel_battery_voltage).publish_state(values[1] * 0.001f);
+      id(panel_battery_current).publish_state(current_ma);
+      id(panel_battery_average_current).publish_state(average_ma);
+      id(panel_battery_remaining).publish_state(values[4]);
+      id(panel_battery_full).publish_state(values[5]);
+      id(panel_battery_design).publish_state(values[6]);
+      id(panel_battery_status).publish_state(values[7]);
+      id(panel_battery_operation_status).publish_state(values[8]);
+      // Voltage indication: 3200 mV = 0%, 4200 mV = 100%.
+      // Linear voltage scale, not remaining capacity. Zero requests software sleep, not BAT isolation.
+      // Raw BQ SOC does not gate the voltage estimate; retain it in the diagnostic log.
+      float voltage_percent = NAN;
+      if (present && initialized && values[1] >= 2000 && values[1] <= 5000) {
+        const float estimate = (float(values[1]) - 3200.0f) * 100.0f / 1000.0f;
+        voltage_percent = estimate < 0.0f ? 0.0f : (estimate > 100.0f ? 100.0f : estimate);
+      }
+      ESP_LOGI("panel_battery", "v1.15 voltage_pct=%.1f%% BQ_SOC=%u%% U=%umV I=%dmA avg=%dmA rem=%umAh FCC=%umAh design=%umAh BS=0x%04X OS=0x%04X present=%d init=%d",
+               voltage_percent, values[0], values[1], current_ma, average_ma, values[4], values[5], values[6], values[7], values[8], present, initialized);
+      return voltage_percent;
+    on_value:
+      - script.execute: panel_refresh_battery_ui
+      - if:
+          condition:
+            # Use the unrounded measured scale; a displayed rounded zero alone is insufficient.
+            lambda: return std::isfinite(x) && x <= 0.0f && !id(panel_battery_shutdown);
+          then:
+            - script.execute: panel_battery_sleep
+  - platform: template
+    id: panel_battery_voltage
+    name: "${friendly_name} bateria napiecie"
+    entity_category: diagnostic
+    accuracy_decimals: 3
+    update_interval: never
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+  - platform: template
+    id: panel_battery_current
+    name: "${friendly_name} bateria prad"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+    unit_of_measurement: "mA"
+    device_class: current
+    state_class: measurement
+  - platform: template
+    id: panel_battery_average_current
+    name: "${friendly_name} bateria prad sredni"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+    unit_of_measurement: "mA"
+    device_class: current
+    state_class: measurement
+  - platform: template
+    id: panel_battery_remaining
+    name: "${friendly_name} bateria pojemnosc pozostala"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+    unit_of_measurement: "mAh"
+    state_class: measurement
+  - platform: template
+    id: panel_battery_full
+    name: "${friendly_name} bateria pojemnosc pelna FCC"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+    unit_of_measurement: "mAh"
+    state_class: measurement
+  - platform: template
+    id: panel_battery_design
+    name: "${friendly_name} bateria pojemnosc projektowa"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+    unit_of_measurement: "mAh"
+    state_class: measurement
+  - platform: template
+    id: panel_battery_status
+    name: "${friendly_name} bateria status BS"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: panel_battery_operation_status
+    name: "${friendly_name} bateria status OS"
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: homeassistant
+    id: panel_weather_temp
+    entity_id: ${weather_entity}
+    attribute: temperature
+    unit_of_measurement: "Â°C"
+    accuracy_decimals: 1
+  - platform: homeassistant
+    id: panel_weather_feels_like
+    entity_id: sensor.dom_apparent_temperature
+    unit_of_measurement: "Â°C"
+    accuracy_decimals: 1
+  - platform: homeassistant
+    id: panel_weather_humidity
+    entity_id: ${weather_entity}
+    attribute: humidity
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+  - platform: homeassistant
+    id: panel_weather_pressure
+    entity_id: ${weather_entity}
+    attribute: pressure
+    unit_of_measurement: hPa
+    accuracy_decimals: 0
+  - platform: homeassistant
+    id: panel_weather_wind
+    entity_id: ${weather_entity}
+    attribute: wind_speed
+    unit_of_measurement: "km/h"
+    accuracy_decimals: 1
+  - platform: debug
+    free:
+      id: panel_free_heap
+      name: "${friendly_name} wolny heap"
+    block:
+      id: panel_heap_block
+      name: "${friendly_name} najwiekszy blok heap"
+    loop_time:
+      id: panel_loop_time
+      name: "${friendly_name} czas petli"
+  - platform: uptime
+    id: panel_uptime
+    name: "${friendly_name} czas pracy"
+    entity_category: diagnostic
+    update_interval: 30s
+
+  - platform: wifi_signal
+    id: panel_wifi_signal
+    name: "${friendly_name} siĹ‚a Wi-Fi"
+    entity_category: diagnostic
+    update_interval: 30s
+
+text_sensor:
+  - platform: homeassistant
+    id: spider_media_title
+    entity_id: media_player.spider_one_audio_receiver_2
+    attribute: media_title
+    internal: true
+    on_value:
+      then:
+        - script.execute: panel_refresh_audio_ui
+  - platform: homeassistant
+    id: spider_media_artist
+    entity_id: media_player.spider_one_audio_receiver_2
+    attribute: media_artist
+    internal: true
+    on_value:
+      then:
+        - script.execute: panel_refresh_audio_ui
+  - platform: homeassistant
+    id: spider_media_state
+    entity_id: media_player.spider_one_audio_receiver_2
+    internal: true
+    on_value:
+      then:
+        - script.execute: panel_refresh_audio_ui
+  # Opcje z edytowalnych helperĂłw HA, stan rozdzielany znakiem ~.
+  - platform: homeassistant
+    id: spider_radio_options
+    entity_id: sensor.sodom_panel_7c_radio_options
+    internal: true
+    on_value:
+      then:
+        - script.execute: panel_refresh_media_list
+  - platform: homeassistant
+    id: spider_playlist_options
+    entity_id: sensor.sodom_panel_7c_playlist_options
+    internal: true
+    on_value:
+      then:
+        - script.execute: panel_refresh_media_list
+  - platform: homeassistant
+    id: panel_weather_condition
+    entity_id: ${weather_entity}
+  - platform: homeassistant
+    id: panel_budzik_state
+    entity_id: input_datetime.budzik
+    internal: true
+  - platform: homeassistant
+    id: panel_timer_state
+    entity_id: timer.minutnik
+    internal: true
+  - platform: homeassistant
+    id: panel_home_state
+    entity_id: sensor.stan_domu
+  - platform: homeassistant
+    id: panel_home_state_detail
+    entity_id: sensor.stan_domu_opis
+  - platform: homeassistant
+    id: panel_infra_state
+    entity_id: sensor.stan_infrastruktury
+  - platform: homeassistant
+    id: panel_alarm_state
+    entity_id: alarm_control_panel.alarm_dom
+  - platform: homeassistant
+    id: panel_light_bed_kula
+    entity_id: light.bedroom_uplights_l2
+    internal: true
+  - platform: homeassistant
+    id: panel_light_bed_led
+    entity_id: light.bedroom_uplights_l1
+    internal: true
+  - platform: homeassistant
+    id: panel_light_bed_lamp
+    entity_id: light.bedlamp_1
+    internal: true
+  - platform: homeassistant
+    id: panel_light_home_salon
+    entity_id: light.swiatlo_w_salonie
+    internal: true
+  - platform: homeassistant
+    id: panel_light_home_studio
+    entity_id: light.swiatlo_w_studio
+    internal: true
+  - platform: homeassistant
+    id: panel_light_home_hall_1
+    entity_id: light.hall_l1
+    internal: true
+  - platform: homeassistant
+    id: panel_light_home_hall_2
+    entity_id: light.hall_l2
+    internal: true
+  - platform: homeassistant
+    id: panel_light_home_hall_3
+    entity_id: light.hall_3
+    internal: true
+  - platform: homeassistant
+    id: panel_light_home_bathroom
+    entity_id: light.bathroom
+    internal: true
+  - platform: homeassistant
+    id: panel_light_home_wc
+    entity_id: light.wc
+    internal: true
+  - platform: debug
+    reset_reason:
+      name: "${friendly_name} przyczyna restartu"
+  - platform: template
+    name: "${friendly_name} wersja projektu"
+    lambda: 'return {"1.15-battery-sleep-esphome-2026.10"};'
+    update_interval: 60s
+  - platform: wifi_info
+    ip_address:
+      name: "${friendly_name} adres IP"
+      entity_category: diagnostic
+    mac_address:
+      name: "${friendly_name} adres MAC"
+      entity_category: diagnostic
+
+
+
+
+
+
+
+
+
+
+micro_wake_word:
+  id: panel_mww
+  microphone:
+    microphone: panel_mic
+    channels: 0
+    gain_factor: 4
+  task_stack_in_psram: true
+  stop_after_detection: true
+  vad:
+  models:
+    - model: alexa
+      id: panel_model_alexa
+    - model: okay_nabu
+      id: panel_model_okay_nabu
+  on_wake_word_detected:
+    - logger.log:
+        level: INFO
+        format: "v1.7 WW detected: %s"
+        args: [wake_word.c_str()]
+    # Pierwszy sygnal lokalny; kolejne tury sygnalizuje HA.
+    - script.execute: panel_wake_chime_play
+    - script.wait: panel_wake_chime_play
+    - wait_until:
+        condition:
+          lambda: return id(panel_signal_speaker).is_stopped() && !id(panel_speaker).has_buffered_data();
+        timeout: 3s
+    - if:
+        condition:
+          lambda: return !id(panel_signal_speaker).is_stopped() || id(panel_speaker).has_buffered_data();
+        then:
+          - logger.log:
+              level: WARN
+              format: "v1.15 WW chime: audio drain timeout, starting Assist"
+    - delay: 80ms
+    - voice_assistant.start:
+        id: panel_assist
+        wake_word: !lambda return wake_word;
+
+switch:
+  - platform: template
+    name: "Wake word"
+    id: panel_ww_enabled
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    icon: mdi:microphone-message
+    on_turn_on:
+      - script.execute: panel_ww_restart
+    on_turn_off:
+      - script.stop: panel_ww_restart
+      - micro_wake_word.stop:
+          id: panel_mww
+
+number:
+  - platform: template
+    name: "JasnoĹ›Ä‡ podĹ›wietlenia LCD"
+    id: panel_lcd_brightness
+    icon: mdi:brightness-6
+    entity_category: config
+    mode: slider
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 100
+    optimistic: true
+    restore_value: true
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: return id(panel_ui_ready);
+            then:
+              - script.execute: panel_apply_backlight
+
+  - platform: template
+    name: "CzuĹ‚oĹ›Ä‡ wybudzania Alexa"
+    id: panel_wake_sensitivity_alexa
+    icon: mdi:ear-hearing
+    entity_category: config
+    mode: slider
+    min_value: 1
+    max_value: 15
+    step: 1
+    initial_value: 9
+    optimistic: true
+    restore_value: true
+    on_value:
+      then:
+        - lambda: |-
+            const float cutoff = 1.0f - (x * 0.01f);
+            id(panel_model_alexa).set_probability_cutoff(
+              static_cast<uint8_t>((cutoff * 255.0f) + 0.5f)
+            );
+
+  - platform: template
+    name: "CzuĹ‚oĹ›Ä‡ wybudzania Okay Nabu"
+    id: panel_wake_sensitivity_okay_nabu
+    icon: mdi:ear-hearing
+    entity_category: config
+    mode: slider
+    min_value: 1
+    max_value: 15
+    step: 1
+    initial_value: 2
+    optimistic: true
+    restore_value: true
+    on_value:
+      then:
+        - lambda: |-
+            const float cutoff = 1.0f - (x * 0.01f);
+            id(panel_model_okay_nabu).set_probability_cutoff(
+              static_cast<uint8_t>((cutoff * 255.0f) + 0.5f)
+            );
+
+

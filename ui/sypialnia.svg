@@ -1,0 +1,249 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <defs>
+    <!-- Cienie Material Design -->
+    <filter id="shadow-card" x="-5%" y="-5%" width="110%" height="115%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="shadow-active-light" x="-10%" y="-10%" width="120%" height="125%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#FFB300" flood-opacity="0.35"/>
+    </filter>
+
+    <!-- Gradienty tła i powierzchni -->
+    <linearGradient id="bg-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#121212"/>
+      <stop offset="100%" stop-color="#0A0A0A"/>
+    </linearGradient>
+
+    <linearGradient id="card-surface" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#212121"/>
+      <stop offset="100%" stop-color="#181818"/>
+    </linearGradient>
+
+    <!-- Gradient aktywnego światła (bursztyn z dashboardu HA) -->
+    <linearGradient id="light-on-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#543A0C"/>
+      <stop offset="100%" stop-color="#362405"/>
+    </linearGradient>
+  </defs>
+
+  <style>
+    .font-base { font-family: -apple-system, BlinkMacSystemFont, "Roboto", "Segoe UI", sans-serif; }
+    .tab-text { font-size: 13px; font-weight: 700; letter-spacing: 0.8px; }
+    .btn-title { font-size: 16px; font-weight: 700; letter-spacing: 0.6px; }
+    .btn-subtitle { font-size: 12px; font-weight: 500; }
+  </style>
+
+  <!-- 1. GŁÓWNE TŁO -->
+  <rect width="800" height="480" fill="url(#bg-gradient)"/>
+
+  <!-- 2. STAŁY GÓRNY PASEK ZAKŁADEK (H: 52px) -->
+  <rect x="0" y="0" width="800" height="52" fill="#161616"/>
+  <line x1="0" y1="52" x2="800" y2="52" stroke="#2A2A2A" stroke-width="1"/>
+
+  <!-- Tab 1: DOM -->
+  <g transform="translate(12, 6)">
+    <rect x="0" y="0" width="186" height="40" rx="8" fill="transparent"/>
+    <text x="93" y="24" fill="#757575" class="font-base tab-text" text-anchor="middle">DOM</text>
+  </g>
+
+  <!-- Tab 2: AUDIO (SPIDER) -->
+  <g transform="translate(206, 6)">
+    <rect x="0" y="0" width="186" height="40" rx="8" fill="transparent"/>
+    <text x="93" y="24" fill="#757575" class="font-base tab-text" text-anchor="middle">AUDIO (SPIDER)</text>
+  </g>
+
+  <!-- Tab 3: OŚW. SYPIALNIA (AKTYWNA) -->
+  <g transform="translate(400, 6)">
+    <rect x="0" y="0" width="186" height="40" rx="8" fill="#2A2D32" stroke="#3D444E" stroke-width="1.5"/>
+    <rect x="20" y="36" width="146" height="4" rx="2" fill="#00E5FF"/>
+    <text x="93" y="24" fill="#FFFFFF" class="font-base tab-text" text-anchor="middle">OŚW. SYPIALNIA</text>
+  </g>
+
+  <!-- Tab 4: OŚW. W DOMU -->
+  <g transform="translate(594, 6)">
+    <rect x="0" y="0" width="194" height="40" rx="8" fill="transparent"/>
+    <text x="97" y="24" fill="#757575" class="font-base tab-text" text-anchor="middle">OŚW. W DOMU</text>
+  </g>
+
+
+  <!-- 3. OBSZAR ROBOCZY: LEWA STRONA - GŁÓWNE OBWODY SYPIALNI (x: 16, y: 64, w: 468, h: 338) -->
+  <g filter="url(#shadow-card)">
+    <rect x="16" y="64" width="468" height="338" rx="14" fill="url(#card-surface)" stroke="#2C2C2E" stroke-width="1"/>
+
+    <text x="36" y="96" fill="#8E8E93" class="font-base" font-size="12" font-weight="700" letter-spacing="1">OBWODY ŚWIATŁA W SYPIALNI</text>
+
+    <!-- KAFEL 1: KULA (AKTYWNA / WŁĄCZONA - BURSZTYN) -->
+    <g transform="translate(36, 110)" filter="url(#shadow-active-light)">
+      <rect x="0" y="0" width="428" height="74" rx="12" fill="url(#light-on-grad)" stroke="#FFB300" stroke-width="1.5"/>
+      <!-- Ikona Kula / Lampa wisząca -->
+      <g transform="translate(20, 16)">
+        <line x1="20" y1="0" x2="20" y2="12" stroke="#FFD54F" stroke-width="2.5"/>
+        <circle cx="20" cy="24" r="14" fill="#FFC107"/>
+        <circle cx="20" cy="24" r="7" fill="#FFF8E1"/>
+      </g>
+      <!-- Tekst i stan -->
+      <text x="76" y="34" fill="#FFFFFF" class="font-base btn-title">KULA</text>
+      <text x="76" y="54" fill="#FFD54F" class="font-base btn-subtitle">Włączona • 100%</text>
+      <!-- Przełącznik Toggle (ON) -->
+      <g transform="translate(356, 21)">
+        <rect x="0" y="0" width="52" height="32" rx="16" fill="#FFB300"/>
+        <circle cx="36" cy="16" r="12" fill="#141414"/>
+      </g>
+    </g>
+
+    <!-- KAFEL 2: TAŚMA LED (WYŁĄCZONA) -->
+    <g transform="translate(36, 196)">
+      <rect x="0" y="0" width="428" height="74" rx="12" fill="#1C1C1E" stroke="#2C2C2E" stroke-width="1"/>
+      <!-- Ikona Taśma LED -->
+      <g transform="translate(20, 18)">
+        <rect x="4" y="8" width="32" height="20" rx="3" fill="#2A2A2E" stroke="#757575" stroke-width="2"/>
+        <circle cx="12" cy="18" r="2.5" fill="#757575"/>
+        <circle cx="20" cy="18" r="2.5" fill="#757575"/>
+        <circle cx="28" cy="18" r="2.5" fill="#757575"/>
+      </g>
+      <text x="76" y="34" fill="#E0E0E0" class="font-base btn-title">TAŚMA LED</text>
+      <text x="76" y="54" fill="#757575" class="font-base btn-subtitle">Wyłączona</text>
+      <!-- Przełącznik Toggle (OFF) -->
+      <g transform="translate(356, 21)">
+        <rect x="0" y="0" width="52" height="32" rx="16" fill="#2E2E32"/>
+        <circle cx="16" cy="16" r="12" fill="#8E8E93"/>
+      </g>
+    </g>
+
+    <!-- KAFEL 3: LAMPKA NOCNA (WYŁĄCZONA) -->
+    <g transform="translate(36, 282)">
+      <rect x="0" y="0" width="428" height="74" rx="12" fill="#1C1C1E" stroke="#2C2C2E" stroke-width="1"/>
+      <!-- Ikona Lampka nocna -->
+      <g transform="translate(20, 16)">
+        <path d="M10 24 L30 24 L26 10 L14 10 Z" fill="#2A2A2E" stroke="#757575" stroke-width="2"/>
+        <line x1="20" y1="24" x2="20" y2="34" stroke="#757575" stroke-width="2.5"/>
+        <line x1="12" y1="34" x2="28" y2="34" stroke="#757575" stroke-width="2.5" stroke-linecap="round"/>
+      </g>
+      <text x="76" y="34" fill="#E0E0E0" class="font-base btn-title">LAMPKA NOCNA</text>
+      <text x="76" y="54" fill="#757575" class="font-base btn-subtitle">Wyłączona</text>
+      <g transform="translate(356, 21)">
+        <rect x="0" y="0" width="52" height="32" rx="16" fill="#2E2E32"/>
+        <circle cx="16" cy="16" r="12" fill="#8E8E93"/>
+      </g>
+    </g>
+  </g>
+
+
+  <!-- 4. OBSZAR ROBOCZY: PRAWA STRONA - SCENY & SZYBKIE AKCJE (x: 500, y: 64, w: 284, h: 338) -->
+  <g filter="url(#shadow-card)">
+    <rect x="500" y="64" width="284" height="338" rx="14" fill="url(#card-surface)" stroke="#2C2C2E" stroke-width="1"/>
+
+    <text x="520" y="96" fill="#8E8E93" class="font-base" font-size="12" font-weight="700" letter-spacing="1">SCENY SYPIALNI</text>
+
+    <!-- Scena 1: DO SNU -->
+    <g transform="translate(520, 110)">
+      <rect x="0" y="0" width="244" height="58" rx="10" fill="#1C1C1E" stroke="#2C2C2E" stroke-width="1"/>
+      <!-- Ikona księżyca -->
+      <path d="M26 18 A11 11 0 1 0 38 34 A14 14 0 0 1 26 18 Z" fill="#4FC3F7"/>
+      <text x="48" y="28" fill="#FFFFFF" class="font-base" font-size="14" font-weight="700">TRYB NOCNY</text>
+      <text x="48" y="44" fill="#8E8E93" class="font-base" font-size="11">Wygaszenie + ekran 5%</text>
+    </g>
+
+    <!-- Scena 2: CZYTANIE -->
+    <g transform="translate(520, 180)">
+      <rect x="0" y="0" width="244" height="58" rx="10" fill="#1C1C1E" stroke="#2C2C2E" stroke-width="1"/>
+      <!-- Ikona książki -->
+      <path d="M18 20 Q26 17 34 20 L34 36 Q26 33 18 36 Z M34 20 Q42 17 50 20 L50 36 Q42 33 34 36 Z" fill="none" stroke="#FFB300" stroke-width="2"/>
+      <text x="54" y="28" fill="#FFFFFF" class="font-base" font-size="14" font-weight="700">CZYTANIE</text>
+      <text x="54" y="44" fill="#8E8E93" class="font-base" font-size="11">Lampka nocna 70%</text>
+    </g>
+
+    <!-- Scena 3: RELAKS -->
+    <g transform="translate(520, 250)">
+      <rect x="0" y="0" width="244" height="58" rx="10" fill="#1C1C1E" stroke="#2C2C2E" stroke-width="1"/>
+      <!-- Ikona świecy/płomienia -->
+      <path d="M28 20 C24 24 24 28 28 32 C32 28 32 24 28 20 Z" fill="#FF7043"/>
+      <text x="48" y="28" fill="#FFFFFF" class="font-base" font-size="14" font-weight="700">RELAKS</text>
+      <text x="48" y="44" fill="#8E8E93" class="font-base" font-size="11">Taśma LED ciepła 30%</text>
+    </g>
+
+    <!-- Przycisk Master: ZGAŚ SYPIALNIĘ -->
+    <g transform="translate(520, 320)">
+      <rect x="0" y="0" width="244" height="58" rx="10" fill="#2B1616" stroke="#D32F2F" stroke-width="1.2"/>
+      <!-- Ikona Power OFF -->
+      <path d="M26 22 A10 10 0 1 0 38 22 M32 16 L32 24" stroke="#EF5350" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+      <text x="50" y="28" fill="#FFCDD2" class="font-base" font-size="13" font-weight="800">ZGAŚ SYPIALNIĘ</text>
+      <text x="50" y="44" fill="#E57373" class="font-base" font-size="11">Wyłącz wszystkie 3</text>
+    </g>
+  </g>
+
+
+  <!-- 5. STAŁY DOLNY PASEK STATUSU (H: 58px) -->
+  <g transform="translate(0, 422)">
+    <rect x="0" y="0" width="800" height="58" fill="#141414"/>
+    <line x1="0" y1="0" x2="800" y2="0" stroke="#2A2A2A" stroke-width="1"/>
+
+    <!-- Łączność (Wi-Fi 4 kreski + Domek HA) -->
+    <g transform="translate(18, 16)">
+      <g transform="translate(0, 4)">
+        <rect x="0" y="14" width="3.5" height="6" rx="1" fill="#00E5FF"/>
+        <rect x="5.5" y="10" width="3.5" height="10" rx="1" fill="#00E5FF"/>
+        <rect x="11" y="6" width="3.5" height="14" rx="1" fill="#00E5FF"/>
+        <rect x="16.5" y="1" width="3.5" height="19" rx="1" fill="#00E5FF"/>
+      </g>
+      <g transform="translate(32, 2)">
+        <path d="M12 2 L2 11 L5 11 L5 21 L19 21 L19 11 L22 11 Z" fill="#00E5FF"/>
+        <circle cx="12" cy="14" r="2.2" fill="#141414"/>
+        <circle cx="9" cy="17" r="1.5" fill="#141414"/>
+        <circle cx="15" cy="17" r="1.5" fill="#141414"/>
+        <line x1="12" y1="14" x2="9" y2="17" stroke="#141414" stroke-width="1.2"/>
+        <line x1="12" y1="14" x2="15" y2="17" stroke="#141414" stroke-width="1.2"/>
+      </g>
+    </g>
+
+    <!-- Pastylki stanów -->
+    <g transform="translate(98, 12)">
+      <rect x="0" y="0" width="66" height="32" rx="16" fill="#222224" stroke="#333336" stroke-width="1"/>
+      <circle cx="15" cy="16" r="5" fill="#00E676"/>
+      <text x="28" y="21" fill="#E0E0E0" class="font-base" font-size="11" font-weight="700">DOM</text>
+    </g>
+    <g transform="translate(172, 12)">
+      <rect x="0" y="0" width="68" height="32" rx="16" fill="#222224" stroke="#333336" stroke-width="1"/>
+      <circle cx="15" cy="16" r="5" fill="#00E676"/>
+      <text x="28" y="21" fill="#E0E0E0" class="font-base" font-size="11" font-weight="700">INFR</text>
+    </g>
+    <g transform="translate(248, 12)">
+      <rect x="0" y="0" width="72" height="32" rx="16" fill="#222224" stroke="#333336" stroke-width="1"/>
+      <circle cx="15" cy="16" r="5" fill="#FFA726"/>
+      <text x="28" y="21" fill="#E0E0E0" class="font-base" font-size="11" font-weight="700">BEZP</text>
+    </g>
+    <g transform="translate(328, 12)">
+      <rect x="0" y="0" width="94" height="32" rx="16" fill="#381919" stroke="#E53935" stroke-width="1.2"/>
+      <circle cx="15" cy="16" r="5" fill="#E53935"/>
+      <text x="27" y="21" fill="#FFCDD2" class="font-base" font-size="11" font-weight="700">OTWARTE</text>
+    </g>
+
+    <!-- Prawa strona: Stałe sloty -->
+    <g transform="translate(718, 18)">
+      <rect x="0" y="3" width="28" height="15" rx="3" fill="none" stroke="#FFA726" stroke-width="1.6"/>
+      <rect x="28" y="7" width="2.5" height="7" rx="1" fill="#FFA726"/>
+      <rect x="2.5" y="5.5" width="5.5" height="10" rx="1.5" fill="#FFA726"/>
+      <text x="36" y="16" fill="#FFA726" class="font-base" font-size="13" font-weight="800">15%</text>
+    </g>
+    <g transform="translate(678, 18)">
+      <path d="M2 7 L6 7 L12 2 L12 20 L6 15 L2 15 Z" fill="#E0E0E0"/>
+      <path d="M15 6 C17.5 8 17.5 14 15 16" stroke="#00E5FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M18 3 C22 6.5 22 15.5 18 19" stroke="#00E5FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(636, 17)">
+      <rect x="7" y="1" width="8" height="13" rx="4" fill="#00E676"/>
+      <path d="M3 8 C3 14 19 14 19 8 M11 15 L11 20 M6 20 L16 20" stroke="#00E676" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(594, 17)">
+      <circle cx="11" cy="12" r="8" fill="none" stroke="#00E5FF" stroke-width="1.8"/>
+      <line x1="5" y1="18" x2="3" y2="21" stroke="#00E5FF" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="17" y1="18" x2="19" y2="21" stroke="#00E5FF" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M4 6 C4 4 6 3 8 4" stroke="#00E5FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M18 6 C18 4 16 3 14 4" stroke="#00E5FF" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <polyline points="11,8 11,12 14,12" stroke="#00E5FF" stroke-width="1.5" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(552, 17)">
+      <path d="M11 2 A7 7 0 0 0 4 9 L4 14 L2 16 L20 16 L18 14 L18 9 A7 7 0 0 0 11 2 Z M9 17 A2 2 0 0 0 13 17" fill="#FFA726"/>
+    </g>
+  </g>
+</svg>
