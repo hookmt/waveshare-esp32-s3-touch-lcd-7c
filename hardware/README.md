@@ -63,16 +63,17 @@ In real-world testing with two parallel 18650 cells (1S2P configuration, ~4400 m
 * **Total Runtime:** **10 hours 35 minutes** before gracefully triggering the software 3.2V deep-sleep shutdown.
 * **Average Power Consumption:** ~1.5 W from wall power during typical operation.
 
-> [!NOTE]
-> **Rear Battery Holder Photo:** 
-> A detailed photo showing the rear mounting of the 2x 18650 battery holder (`05_battery_holder_2x18650_rear.jpg`) will be attached here upon final physical installation recording.
-
 ---
 
-## 4. Speakers & Enclosure
+## 4. Mechanical Mounting & Speakers Assembly
 
-The panel is designed to run in its factory front housing with dual micro speakers attached to the rear frame:
+The 7C panel is assembled with a clean, functional desktop setup:
+* **Kickstand Battery Holder:** The dual 18650 battery holder is mounted centrally on the rear housing, doubling as a stable angled desktop kickstand.
+* **BMS 1S Circuit Board:** Solder-mounted at the top of the battery holder with short wiring to the internal `BAT` JST connector.
+* **Stereo Speakers on Nano Tape:** High-efficiency micro speakers with golden cones are mounted on the bottom wings of the rear chassis using heavy-duty transparent acrylic nano tape, decoupling acoustic vibrations from the display glass while providing clear room audio.
 
-![Front Panel](02_front_panel.jpg)
-![Speakers Assembly](03_speakers_pre_assembly.jpg)
-![Speaker Dimensions](04_speaker_dimensions.jpg)
+![Front Assembled on Desk](05_front_assembled_desk.jpg)
+![Side Profile and Kickstand](06_side_profile_kickstand.jpg)
+![Rear Battery BMS and Speakers](07_rear_battery_bms_speakers.jpg)
+![Rear Macro BMS Wiring](08_rear_macro_bms_wiring.jpg)
+

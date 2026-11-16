@@ -7,10 +7,11 @@
 
 A production-grade, 7-inch **Smart Home Touch Hub and Voice Assistant Endpoint** for **Home Assistant**, powered by the **Waveshare ESP32-S3-Touch-LCD-7C** development board.
 
-![Waveshare 7C Touch Panel](hardware/02_front_panel.jpg)
+![Waveshare 7C Touch Panel](hardware/05_front_assembled_desk.jpg)
 
 > [!NOTE]
-> **Video Demonstration:** A live video demo showcasing responsive touchscreen navigation, internet radio playback, and direct remote control of the **Spider** Hi-Fi audio player will be published here upon final field recording.
+> **Video Demonstration:** A live video demo showcasing responsive touchscreen navigation, internet radio playback, and direct remote control of the **Spider** Hi-Fi audio player is available in `hardware/7c_touch_spider_demo.mp4` (or embedded below).
+
 
 ---
 
