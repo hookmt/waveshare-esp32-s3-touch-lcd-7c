@@ -16,7 +16,7 @@ The **Waveshare ESP32-S3-Touch-LCD-7C** panel features a multi-tab LVGL interfac
 ### 2. Tab: AUDIO (SPIDER Streamer Control)
 * **Direct Music Assistant Integration:** Controls the room's dedicated **Spider** Hi-Fi audio streamer (`media_player.spider_one_audio_receiver_2`).
 * **Playback Transport:** Play, pause, skip forward, and volume sliders.
-* **Track Metadata:** Real-time artist name, track title, and stream bitrates.
+* **Track Metadata:** Real-time artist name and track title (text metadata, intentionally without album art decoding to conserve RAM and LVGL render cycles).
 * **Radio Station Quick Presets:** One-touch playback of favorite internet radio stations without opening mobile apps.
 * *Source SVG:* [`spider.svg`](spider.svg)
 ![Tab Audio Spider Live](02_ui_tab_audio_spider.jpg)

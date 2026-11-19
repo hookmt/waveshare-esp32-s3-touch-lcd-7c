@@ -18,7 +18,7 @@ A production-grade, 7-inch **Smart Home Touch Hub and Voice Assistant Endpoint**
 ## Highlights
 
 * **7.0" Capacitive Touch Display (800x480):** High-resolution color dashboard powered by LVGL and ESPHome.
-* **Direct Spider Audio Controller:** Live track metadata, play/pause transport, volume sliders, and radio presets for the room's **Spider** audio streamer via Music Assistant.
+* **Direct Spider Audio Controller:** Live track metadata (artist name and track title), play/pause transport, volume sliders, and radio presets for the room's **Spider** audio streamer via Music Assistant.
 * **Acoustic Echo Cancellation (AEC):** Hardware ES7210 dual-microphone processor with custom ring-buffer driver stack (`components/esp_audio_stack`).
 * **Dual-Layer Battery Protection:**
   * **Software Safety:** Monitored cell voltage **≤ 3.20 V** triggers an immediate graceful deep-sleep shutdown.
@@ -73,8 +73,6 @@ In this deployment, the **7C Panel** serves as the central bedside touch control
 ├── ui/
 │   ├── README.md                        # Screen tab breakdown (DOM, AUDIO/SPIDER, OŚWIETLENIE)
 │   └── *.svg                            # Vector source designs for all dashboard screens
-├── firmware/
-│   └── esp32_s3_touch_lcd_7c_factory.bin # Pre-compiled flashable factory binary
 └── README.md
 ```
 
@@ -84,7 +82,7 @@ In this deployment, the **7C Panel** serves as the central bedside touch control
 
 ### Główne cechy
 * **Dotykowy ekran 7.0" (800×480):** pojemnościowy panel dotykowy pracujący pod kontrolą biblioteki LVGL w ESPHome, wyświetlający zegar klapkowy, aktualną pogodę, oświetlenie i strefę audio.
-* **Ekranowy pilot odtwarzacza Spider:** dedykowany widok `AUDIO (SPIDER)` umożliwia bezpośrednie sterowanie domowym odtwarzaczem muzycznym **Spider** (Music Assistant): wybór stacji radiowych, zmiana utworów, podgląd wykonawcy i tytułu oraz płynna regulacja głośności.
+* **Ekranowy pilot odtwarzacza Spider:** dedykowany widok `AUDIO (SPIDER)` umożliwia bezpośrednie sterowanie domowym odtwarzaczem muzycznym **Spider** (Music Assistant): wybór stacji radiowych, zmiana utworów, podgląd tekstu wykonawcy i tytułu oraz płynna regulacja głośności (wyświetlanie wyłącznie metadanych tekstowych, celowo bez renderowania okładek albumów).
 * **Tor audio z kasowaniem echa (AEC):** sprzętowy procesor ES7210 z dwoma mikrofonami analogowymi i dedykowany komponent `esp_audio_stack`, zapobiegający kolizjom buforów I2S podczas jednoczesnego nasłuchu i odtwarzania.
 * **Podwójna ochrona zasilania (BMS 1S + Deep Sleep 3.2V):**
   * **Ochrona programowa:** przy spadku napięcia do **≤ 3,20 V** ESPHome natychmiast wyłącza podświetlenie, przetwornicę LCD i usypia procesor (deep sleep), chroniąc ogniwa przed degradacją.
