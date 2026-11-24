@@ -89,6 +89,17 @@ In this deployment, the **7C Panel** serves as the central bedside touch control
   * **Ochrona sprzętowa:** moduł BMS 1S (3A) zabezpiecza koszyk 2x 18650 (układ 1S2P, ~4400 mAh) przed zwarciem i przeładowaniem.
   * **Wynik testu poligonowego:** panel przepracował nieprzerwanie **10 godzin i 35 minut** na zasilaniu bateryjnym przy normalnym, aktywnym użytkowaniu. Średni pobór mocy z sieci to zaledwie **~1,5 W**.
 
+### 🤖 Dostosowanie do Twojego systemu z pomocą AI (AI-First Customization)
+Udostępniony plik YAML jest kompletny, w 100% przetestowany na działającym urządzeniu i gotowy do wgrania, ale jest dostosowany do mojego systemu domowego (konkretne nazwy encji, stref, odtwarzacza Spider i struktura `secrets.yaml`). 
+
+Jeśli chcesz go zrozumieć i szybko dostosować do Twojego systemu Home Assistant, nie musisz ręcznie analizować setek linii kodu. Skopiuj poniższy prompt i wklej go razem z plikiem `esphome/esp32_s3_touch_lcd_7c.yaml` do swojego asystenta AI (ChatGPT, Claude, Cursor, Antigravity):
+
+> **Prompt dla Twojego Agenta / Czatu AI:**
+> "Wklejam działający, kompletny plik konfiguracyjny ESPHome. Jest on skonfigurowany pod system autora. Pomóż mi dostosować go do mojego systemu Home Assistant:
+> 1. Wyjaśnij mi krótko strukturę pliku i wskaż miejsca wymagające zmian pod mój dom (dostęp do Wi-Fi, odwołania do mojego secrets.yaml, czułość wake worda, dotyk LVGL, encje odtwarzacza Spider).
+> 2. Jeśli masz dostęp do mojego Home Assistanta przez serwer MCP, przejrzyj moje encje i dopasuj nazwy głośników, powiadomień oraz pokoi bezpośrednio do mojej instalacji.
+> 3. Zwróć mi gotowy, czysty plik YAML przygotowany do wgrania na moje urządzenie."
+
 ---
 
 ## Quick Start
@@ -104,6 +115,17 @@ Enter your home network credentials.
 ```bash
 esphome run esphome/esp32_s3_touch_lcd_7c.yaml
 ```
+
+### 3. Tailoring to Your Home Assistant using AI (AI-First Customization)
+The provided YAML file is complete, fully tested on physical hardware, and ready to flash, but it is tailored to the author's home setup (entity names, room media players, Spider audio controls, and secrets mapping).
+
+If you want to understand it and adapt it to your own Home Assistant instance, you do not need to manually parse hundreds of lines of code. Simply copy the prompt below and paste it along with `esphome/esp32_s3_touch_lcd_7c.yaml` into your AI assistant (ChatGPT, Claude, Cursor, or Antigravity):
+
+> **Prompt for your AI Agent / Chat:**
+> "I am providing a complete, working ESPHome configuration file tailored to the author's setup. Please help me adapt it to my own Home Assistant environment:
+> 1. Briefly explain the key blocks and highlight what needs to be adjusted for my home (Wi-Fi credentials, secrets.yaml mapping, wake-word sensitivity, LVGL touch controls, Spider media player entities).
+> 2. If you have MCP access to my Home Assistant, inspect my entities and automatically align media player names, notify services, and area names to match my setup.
+> 3. Provide a ready-to-flash, customized YAML file tailored for my device."
 
 ---
 
